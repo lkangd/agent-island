@@ -176,7 +176,7 @@ struct InstanceRow: View {
 
     /// Codex approvals must be completed in the terminal
     private var usesTerminalApprovalUI: Bool {
-        isWaitingForApproval && session.usesTerminalApproval
+        isWaitingForApproval && session.agentType.approvalCapability.supportedActions == [.terminal]
     }
 
     /// Whether the pending tool requires interactive input (not just approve/deny)
@@ -334,7 +334,7 @@ struct InstanceRow: View {
                     .foregroundColor(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             } else if usesTerminalApprovalUI {
-                Text(session.pendingToolInput ?? "Waiting for confirmation in Terminal")
+                Text(session.pendingToolInput ?? "Jump to Terminal to continue")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.5))
                     .lineLimit(1)
@@ -370,10 +370,27 @@ struct InstanceRow: View {
             ListApprovalBar(
                 tool: session.pendingToolName ?? "tool",
                 toolInput: session.pendingToolInput,
-                supportedPolicies: session.agentType.approvalCapability.supportedPolicies,
-                onPolicy: onPolicy
+                agentType: session.agentType,
+                supportedActions: session.agentType.approvalCapability.supportedActions,
+                isTerminalEnabled: session.isInTmux,
+                onAction: handleApprovalAction
             )
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        }
+    }
+
+    private func handleApprovalAction(_ action: ApprovalAction) {
+        switch action {
+        case .deny:
+            onPolicy(.deny)
+        case .allowOnce:
+            onPolicy(.allowOnce)
+        case .allowAlways:
+            onPolicy(.allowAlways)
+        case .autoExecute:
+            onPolicy(.autoExecute)
+        case .terminal:
+            onFocus()
         }
     }
 
@@ -439,8 +456,10 @@ struct AgentBadge: View {
 struct ListApprovalBar: View {
     let tool: String
     let toolInput: String?
-    let supportedPolicies: [ApprovalPolicy]
-    let onPolicy: (ApprovalPolicy) -> Void
+    let agentType: AgentPlatform
+    let supportedActions: [ApprovalAction]
+    let isTerminalEnabled: Bool
+    let onAction: (ApprovalAction) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -448,7 +467,7 @@ struct ListApprovalBar: View {
                 Circle()
                     .fill(TerminalColors.amber)
                     .frame(width: 7, height: 7)
-                Text("Permission Request")
+                Text(agentType == .codex ? "Confirm Command" : "Permission Request")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.55))
             }
@@ -466,20 +485,27 @@ struct ListApprovalBar: View {
                 }
             }
 
+            if agentType == .codex {
+                Text("Continue will let Codex run this command immediately.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.38))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 8) {
-                ForEach(ApprovalPolicy.allCases, id: \.self) { policy in
-                    let isEnabled = supportedPolicies.contains(policy)
+                ForEach(supportedActions, id: \.self) { action in
+                    let isEnabled = action != .terminal || isTerminalEnabled
                     Button {
                         if isEnabled {
-                            onPolicy(policy)
+                            onAction(action)
                         }
                     } label: {
-                        Text(label(for: policy))
+                        label(for: action)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(foregroundColor(for: policy, isEnabled: isEnabled))
+                            .foregroundColor(foregroundColor(for: action, isEnabled: isEnabled))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(backgroundColor(for: policy, isEnabled: isEnabled))
+                            .background(backgroundColor(for: action, isEnabled: isEnabled))
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -492,29 +518,43 @@ struct ListApprovalBar: View {
         .background(actionBarContainer)
     }
 
-    private func label(for policy: ApprovalPolicy) -> String {
-        switch policy {
+    @ViewBuilder
+    private func label(for action: ApprovalAction) -> some View {
+        if action == .terminal {
+            HStack(spacing: 4) {
+                Image(agentIcon: "terminal")
+                    .font(.system(size: 10, weight: .medium))
+                Text(isTerminalEnabled ? "Jump" : "Unavailable")
+            }
+        } else {
+            Text(compactLabel(for: action))
+        }
+    }
+
+    private func compactLabel(for action: ApprovalAction) -> String {
+        switch action {
         case .deny: return "Deny"
-        case .allowOnce: return "Once"
+        case .allowOnce: return agentType == .codex ? "Continue" : "Once"
         case .allowAlways: return "Always"
         case .autoExecute: return "Auto"
+        case .terminal: return "Jump"
         }
     }
 
-    private func foregroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func foregroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return .white.opacity(0.35) }
-        switch policy {
+        switch action {
         case .deny: return .white.opacity(0.8)
-        case .allowOnce, .allowAlways, .autoExecute: return .black
+        case .allowOnce, .allowAlways, .autoExecute, .terminal: return .black
         }
     }
 
-    private func backgroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func backgroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return Color.white.opacity(0.08) }
-        switch policy {
+        switch action {
         case .deny:
             return Color.white.opacity(0.12)
-        case .allowOnce:
+        case .allowOnce, .terminal:
             return Color.white.opacity(0.92)
         case .allowAlways:
             return Color(red: 0.95, green: 0.62, blue: 0.18)
@@ -537,7 +577,7 @@ struct ListTerminalApprovalBar: View {
                     Circle()
                         .fill(TerminalColors.amber)
                         .frame(width: 7, height: 7)
-                    Text("Confirm in Terminal")
+                    Text("Jump to Terminal")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.55))
                 }
@@ -546,7 +586,7 @@ struct ListTerminalApprovalBar: View {
                     Text(MCPToolFormatter.formatToolName(tool))
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundColor(TerminalColors.amber)
-                    Text(toolInput ?? "Waiting for confirmation in Terminal")
+                    Text(toolInput ?? (isEnabled ? "Jump to Terminal to continue" : "Terminal jump unavailable"))
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
@@ -580,7 +620,7 @@ struct ListAskBar: View {
                         .foregroundColor(.cyan)
                 }
 
-                Text("Needs your input in Terminal")
+                Text(isEnabled ? "Needs your input in Terminal" : "Terminal jump unavailable")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.8))
             }
@@ -615,26 +655,27 @@ private var actionBarContainer: some View {
 
 /// Compact inline approval buttons with staggered animation
 struct InlineApprovalButtons: View {
-    let supportedPolicies: [ApprovalPolicy]
-    let onPolicy: (ApprovalPolicy) -> Void
+    let supportedActions: [ApprovalAction]
+    let isTerminalEnabled: Bool
+    let onAction: (ApprovalAction) -> Void
 
     @State private var showPolicyButtons = false
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(ApprovalPolicy.allCases, id: \.self) { policy in
-                let isEnabled = supportedPolicies.contains(policy)
+            ForEach(supportedActions, id: \.self) { action in
+                let isEnabled = action != .terminal || isTerminalEnabled
                 Button {
                     if isEnabled {
-                        onPolicy(policy)
+                        onAction(action)
                     }
                 } label: {
-                    Text(compactLabel(for: policy))
+                    label(for: action)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(foregroundColor(for: policy, isEnabled: isEnabled))
+                        .foregroundColor(foregroundColor(for: action, isEnabled: isEnabled))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .background(backgroundColor(for: policy, isEnabled: isEnabled))
+                        .background(backgroundColor(for: action, isEnabled: isEnabled))
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -650,29 +691,43 @@ struct InlineApprovalButtons: View {
         }
     }
 
-    private func compactLabel(for policy: ApprovalPolicy) -> String {
-        switch policy {
+    @ViewBuilder
+    private func label(for action: ApprovalAction) -> some View {
+        if action == .terminal {
+            HStack(spacing: 3) {
+                Image(agentIcon: "terminal")
+                    .font(.system(size: 9, weight: .medium))
+                Text(isTerminalEnabled ? "Jump" : "Unavailable")
+            }
+        } else {
+            Text(compactLabel(for: action))
+        }
+    }
+
+    private func compactLabel(for action: ApprovalAction) -> String {
+        switch action {
         case .deny: return "Deny"
         case .allowOnce: return "Once"
         case .allowAlways: return "Always"
         case .autoExecute: return "Auto"
+        case .terminal: return "Jump"
         }
     }
 
-    private func foregroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func foregroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return .white.opacity(0.35) }
-        switch policy {
+        switch action {
         case .deny: return .white.opacity(0.7)
-        case .allowOnce, .allowAlways, .autoExecute: return .black
+        case .allowOnce, .allowAlways, .autoExecute, .terminal: return .black
         }
     }
 
-    private func backgroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func backgroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return Color.white.opacity(0.08) }
-        switch policy {
+        switch action {
         case .deny:
             return Color.white.opacity(0.1)
-        case .allowOnce:
+        case .allowOnce, .terminal:
             return Color.white.opacity(0.92)
         case .allowAlways:
             return Color(red: 0.95, green: 0.60, blue: 0.18)
@@ -723,7 +778,7 @@ struct CompactTerminalButton: View {
             HStack(spacing: 2) {
                 Image(agentIcon: "terminal")
                     .font(.system(size: 8, weight: .medium))
-                Text("Go to Terminal")
+                Text(isEnabled ? "Jump to Terminal" : "Terminal unavailable")
                     .font(.system(size: 10, weight: .medium))
             }
             .foregroundColor(isEnabled ? .white.opacity(0.9) : .white.opacity(0.3))
@@ -751,7 +806,7 @@ struct TerminalButton: View {
             HStack(spacing: 3) {
                 Image(agentIcon: "terminal")
                     .font(.system(size: 9, weight: .medium))
-                Text("Terminal")
+                Text(isEnabled ? "Jump to Terminal" : "Terminal unavailable")
                     .font(.system(size: 11, weight: .medium))
             }
             .foregroundColor(isEnabled ? .black : .white.opacity(0.4))

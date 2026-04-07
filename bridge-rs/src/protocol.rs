@@ -35,6 +35,8 @@ pub struct BridgeProfile {
     pub response_mode: Option<String>,
     pub approval_tools: Vec<String>,
     pub approval_command_patterns: Vec<String>,
+    pub auto_approve_tools: Vec<String>,
+    pub auto_approve_command_patterns: Vec<String>,
 }
 
 impl BridgeProfile {
@@ -57,6 +59,28 @@ impl BridgeProfile {
                 .unwrap_or_default(),
             approval_command_patterns: value
                 .get("approvalCommandPatterns")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            auto_approve_tools: value
+                .get("autoApproveTools")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            auto_approve_command_patterns: value
+                .get("autoApproveCommandPatterns")
                 .and_then(Value::as_array)
                 .map(|items| {
                     items

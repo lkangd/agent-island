@@ -128,12 +128,10 @@ impl SourceAdapter for GeminiAdapter {
     fn permission_mode(
         &self,
         _profile: &crate::protocol::BridgeProfile,
-        normalized: &NormalizedInput,
+        _normalized: &NormalizedInput,
         status: &str,
     ) -> Option<String> {
-        if status == HOOK_STATUS_WAITING_FOR_APPROVAL
-            || normalized.hook_event == HOOK_EVENT_BEFORE_TOOL
-        {
+        if status == HOOK_STATUS_WAITING_FOR_APPROVAL {
             return Some(PERMISSION_MODE_NATIVE_APP.to_string());
         }
 

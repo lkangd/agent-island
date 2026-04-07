@@ -38,6 +38,7 @@ enum AppSettings {
 
     private enum Keys {
         static let notificationSound = "notificationSound"
+        static let codexDangerousCommandPatterns = "codexDangerousCommandPatterns"
     }
 
     // MARK: - Notification Sound
@@ -53,6 +54,22 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Codex Hook Safety
+
+    /// Additional regex patterns that should trigger Codex PreToolUse confirmation.
+    /// These are merged with the built-in dangerous command patterns.
+    static var codexDangerousCommandPatterns: [String] {
+        get {
+            defaults.stringArray(forKey: Keys.codexDangerousCommandPatterns) ?? []
+        }
+        set {
+            let cleaned = newValue
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            defaults.set(Array(NSOrderedSet(array: cleaned)) as? [String] ?? cleaned, forKey: Keys.codexDangerousCommandPatterns)
         }
     }
 }

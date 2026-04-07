@@ -804,10 +804,19 @@ actor SessionStore {
         // Mark running tools as interrupted
         ToolEventProcessor.markRunningToolsInterrupted(session: &session)
 
+        // Codex/Claude can leave a stale hook/transcript processing phase behind after Esc.
+        // Clear active phase sources first so runtime idle can win immediately.
+        session.phaseSources.set(nil, for: .hook)
+        session.phaseSources.set(nil, for: .transcript)
+
         // Transition to idle
         applyPhaseUpdate(to: &session, source: .runtime, phase: .idle)
 
         sessions[sessionId] = session
+
+        // Codex writes interrupt markers into its transcript without emitting a hook event,
+        // so pull one incremental sync to surface the interrupted message in chat history.
+        scheduleFileSync(sessionId: sessionId, cwd: session.cwd)
     }
 
     // MARK: - Clear Processing

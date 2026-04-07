@@ -136,6 +136,19 @@ pub trait SourceAdapter {
     fn requires_approval(&self, profile: &BridgeProfile, normalized: &NormalizedInput) -> bool {
         default_requires_approval(profile, normalized)
     }
+    fn auto_approve_decision(
+        &self,
+        profile: &BridgeProfile,
+        normalized: &NormalizedInput,
+    ) -> Option<&'static str> {
+        if matches_auto_approve_command_patterns(profile, normalized.command_text.as_deref())
+            || matches_auto_approve_tool(profile, normalized.tool_name.as_deref())
+        {
+            return Some("allow");
+        }
+
+        None
+    }
     fn internal_event(
         &self,
         _profile: &BridgeProfile,
@@ -290,6 +303,27 @@ pub fn matches_command_patterns(profile: &BridgeProfile, command_text: Option<&s
     command_text
         .map(|command| {
             profile.approval_command_patterns.iter().any(|pattern| {
+                Regex::new(pattern)
+                    .map(|regex| regex.is_match(command))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+pub fn matches_auto_approve_tool(profile: &BridgeProfile, tool_name: Option<&str>) -> bool {
+    tool_name
+        .map(|name| profile.auto_approve_tools.iter().any(|tool| tool == name))
+        .unwrap_or(false)
+}
+
+pub fn matches_auto_approve_command_patterns(
+    profile: &BridgeProfile,
+    command_text: Option<&str>,
+) -> bool {
+    command_text
+        .map(|command| {
+            profile.auto_approve_command_patterns.iter().any(|pattern| {
                 Regex::new(pattern)
                     .map(|regex| regex.is_match(command))
                     .unwrap_or(false)
@@ -540,13 +574,22 @@ pub fn resolve_tool_input(input: &Value) -> Value {
         }
     }
 
+    if let Some(value) = get_first_value(input, &["params"]) {
+        if let Some(resolved) = expand_arguments_object(&value) {
+            return resolved;
+        }
+    }
+
     Value::Object(Default::default())
 }
 
 fn expand_arguments_object(value: &Value) -> Option<Value> {
-    if let Some(parsed) = parse_json_string_value(value.get("arguments")?) {
-        return Some(parsed);
+    if let Some(arguments) = value.get("arguments") {
+        if let Some(parsed) = parse_json_string_value(arguments) {
+            return Some(parsed);
+        }
     }
+
     Some(value.clone())
 }
 

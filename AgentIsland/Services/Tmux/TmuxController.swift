@@ -7,6 +7,17 @@
 
 import Foundation
 
+enum TmuxSpecialKey: Sendable {
+    case escape
+
+    var tmuxName: String {
+        switch self {
+        case .escape:
+            return "Escape"
+        }
+    }
+}
+
 /// Controller for tmux operations
 actor TmuxController {
     static let shared = TmuxController()
@@ -27,6 +38,10 @@ actor TmuxController {
 
     func sendMessage(_ message: String, to target: TmuxTarget) async -> Bool {
         await ToolApprovalHandler.shared.sendMessage(message, to: target)
+    }
+
+    func sendSpecialKey(_ key: TmuxSpecialKey, to target: TmuxTarget) async -> Bool {
+        await ToolApprovalHandler.shared.sendSpecialKey(key.tmuxName, to: target)
     }
 
     func approveOnce(target: TmuxTarget) async -> Bool {

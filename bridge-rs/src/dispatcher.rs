@@ -7,17 +7,36 @@ pub struct DispatchResult {
     pub payload: Option<crate::protocol::HookPayload>,
     pub hook_event: Option<String>,
     pub status: Option<String>,
+    pub permission_decision: Option<String>,
 }
 
 pub fn dispatch(source: AgentSource, input: &Value, profile: &BridgeProfile) -> DispatchResult {
     let adapter = adapter_for(source);
-    let Some(runtime_event) = adapter.map_event(profile, input) else {
+    let Some(mut runtime_event) = adapter.map_event(profile, input) else {
         return DispatchResult {
             payload: None,
             hook_event: None,
             status: None,
+            permission_decision: None,
         };
     };
+
+    let permission_decision = adapter
+        .auto_approve_decision(profile, &runtime_event.normalized)
+        .map(str::to_owned);
+
+    if permission_decision.is_some() {
+        let status = adapter.status_for_event(&runtime_event.normalized);
+        runtime_event.status = status.clone();
+        runtime_event.internal_event =
+            adapter.internal_event(profile, &runtime_event.normalized, &status);
+        runtime_event.permission_mode =
+            adapter.permission_mode(profile, &runtime_event.normalized, &status);
+
+        if let Value::Object(ref mut extra) = runtime_event.extra {
+            extra.insert("autoApproved".to_string(), Value::Bool(true));
+        }
+    }
 
     let hook_event = runtime_event.hook_event().to_string();
     let status = runtime_event.status.clone();
@@ -28,6 +47,7 @@ pub fn dispatch(source: AgentSource, input: &Value, profile: &BridgeProfile) -> 
         payload: Some(payload),
         hook_event: Some(hook_event),
         status: Some(status),
+        permission_decision,
     }
 }
 
@@ -47,6 +67,8 @@ mod tests {
             response_mode: None,
             approval_tools: vec![],
             approval_command_patterns: vec![],
+            auto_approve_tools: vec![],
+            auto_approve_command_patterns: vec![],
         }
     }
 
@@ -146,5 +168,40 @@ mod tests {
 
         assert_eq!(payload.internal_event, INTERNAL_EVENT_IDLE_PROMPT);
         assert_eq!(payload.permission_mode, None);
+    }
+
+    #[test]
+    fn codex_auto_execute_rule_auto_approves_exact_command() {
+        let input = json!({
+            "session_id": "codex-session",
+            "cwd": "/tmp/project",
+            "method": "PreToolUse",
+            "params": {
+                "name": "Bash",
+                "command": "npm test",
+                "callId": "codex-call-123"
+            }
+        });
+
+        let profile = BridgeProfile {
+            response_mode: Some("codex".to_string()),
+            approval_tools: vec![],
+            approval_command_patterns: vec![],
+            auto_approve_tools: vec![],
+            auto_approve_command_patterns: vec![r"^npm test$".to_string()],
+        };
+
+        let result = dispatch(AgentSource::Codex, &input, &profile);
+        let payload = result.payload.expect("expected payload");
+
+        assert_eq!(payload.tool_input.get("command").and_then(|v| v.as_str()), Some("npm test"));
+        assert_eq!(result.permission_decision.as_deref(), Some("allow"));
+        assert_eq!(payload.status, crate::adapter::HOOK_STATUS_RUNNING_TOOL);
+        assert_eq!(payload.internal_event, crate::adapter::INTERNAL_EVENT_TOOL_WILL_RUN);
+        assert_eq!(payload.permission_mode, None);
+        assert_eq!(
+            payload.extra.get("autoApproved").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 }

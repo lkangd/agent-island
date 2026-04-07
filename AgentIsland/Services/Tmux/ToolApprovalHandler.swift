@@ -48,6 +48,24 @@ actor ToolApprovalHandler {
         await sendKeys(to: target, keys: message, pressEnter: true)
     }
 
+    /// Send a special tmux key without literal mode.
+    func sendSpecialKey(_ key: String, to target: TmuxTarget) async -> Bool {
+        guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
+            return false
+        }
+
+        do {
+            Self.logger.debug("Sending special key \(key, privacy: .public) to \(target.targetString, privacy: .public)")
+            _ = try await ProcessExecutor.shared.run(tmuxPath, arguments: [
+                "send-keys", "-t", target.targetString, key
+            ])
+            return true
+        } catch {
+            Self.logger.error("Error sending special key: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     // MARK: - Private Methods
 
     private func sendKeys(to target: TmuxTarget, keys: String, pressEnter: Bool) async -> Bool {

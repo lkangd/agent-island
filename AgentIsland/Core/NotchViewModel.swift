@@ -46,6 +46,7 @@ class NotchViewModel: ObservableObject {
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
     @Published private(set) var instancesContentHeight: CGFloat = 120
+    @Published private(set) var menuContentHeight: CGFloat = 240
 
     // MARK: - Dependencies
 
@@ -72,12 +73,11 @@ class NotchViewModel: ObservableObject {
                 height: 580
             )
         case .menu:
-            // Compact size for settings menu
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
                 height: min(
                     screenRect.height * 0.82,
-                    640 + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
+                    max(180, menuContentHeight + 32)
                 )
             )
         case .instances:
@@ -289,6 +289,12 @@ class NotchViewModel: ObservableObject {
         let clamped = max(72, ceil(height))
         guard abs(clamped - instancesContentHeight) > 1 else { return }
         instancesContentHeight = clamped
+    }
+
+    func updateMenuContentHeight(_ height: CGFloat) {
+        let clamped = max(160, ceil(height))
+        guard abs(clamped - menuContentHeight) > 1 else { return }
+        menuContentHeight = clamped
     }
 
     /// Go back to instances list and clear saved chat state

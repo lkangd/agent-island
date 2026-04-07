@@ -27,7 +27,8 @@ actor DefaultCapabilityDispatcher {
                     AgentInteractionRegistry.shared.startObservingIfSupported(
                         sessionId: hookEvent.sessionId,
                         agentType: hookEvent.agentType,
-                        cwd: hookEvent.cwd
+                        cwd: hookEvent.cwd,
+                        transcriptPath: hookEvent.transcriptPath
                     )
                 }
             }

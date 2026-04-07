@@ -154,12 +154,10 @@ impl SourceAdapter for CodexAdapter {
     fn permission_mode(
         &self,
         _profile: &BridgeProfile,
-        normalized: &NormalizedInput,
+        _normalized: &NormalizedInput,
         status: &str,
     ) -> Option<String> {
-        if status == HOOK_STATUS_WAITING_FOR_APPROVAL
-            || normalized.hook_event == HOOK_EVENT_PRE_TOOL_USE
-        {
+        if status == HOOK_STATUS_WAITING_FOR_APPROVAL {
             return Some(PERMISSION_MODE_NATIVE_APP.to_string());
         }
 
@@ -197,15 +195,22 @@ impl SourceAdapter for CodexAdapter {
             _ => reason.or(Some("Approved from Agent Island")),
         };
 
-        Some(json!({
-            "decision": mapped,
-            "reason": reason.unwrap_or(""),
-            "hookSpecificOutput": {
-                "hookEventName": HOOK_EVENT_PRE_TOOL_USE,
-                "permissionDecision": mapped,
-                "permissionDecisionReason": permission_reason.unwrap_or(""),
-            },
-        }))
+        match mapped {
+            // Official Codex docs only support deny/block for PreToolUse.
+            // Allowing the tool should return exit 0 with no stdout.
+            "allow" => None,
+            // Prefer the documented deny shape over the legacy block response.
+            "deny" => Some(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": HOOK_EVENT_PRE_TOOL_USE,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": permission_reason.unwrap_or("Denied from Agent Island")
+                }
+            })),
+            // `ask` is parsed by Codex but not officially supported yet; fail open with no stdout.
+            "ask" => None,
+            _ => None,
+        }
     }
 }
 

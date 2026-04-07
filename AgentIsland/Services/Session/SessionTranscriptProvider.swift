@@ -483,6 +483,15 @@ private actor CodexTranscriptProvider: SessionTranscriptProvider {
         let text = textBlocks.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let text = cleanedTitleText(text), !text.isEmpty else { return nil }
 
+        if role == .user, text.contains("<turn_aborted>") {
+            return ChatMessage(
+                id: "\(timestamp.timeIntervalSince1970)-\(lineIndex)-interrupted-response",
+                role: .system,
+                timestamp: timestamp,
+                content: [.interrupted]
+            )
+        }
+
         return ChatMessage(
             id: "\(timestamp.timeIntervalSince1970)-\(lineIndex)-\(role.rawValue)-response",
             role: role,

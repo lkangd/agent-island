@@ -104,6 +104,7 @@ actor ApprovalPolicyStore {
         }
 
         try? data.write(to: policiesURL, options: .atomic)
+        await AgentHookPluginManager.shared.refreshBridgeProfiles(using: rules)
     }
 
     private static func signature(for toolInput: [String: AnyCodable]?) -> String? {

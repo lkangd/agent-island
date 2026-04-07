@@ -7,6 +7,30 @@
 
 import SwiftUI
 
+enum AgentExitCommand: Sendable {
+    case quit
+    case exit
+
+    var text: String {
+        switch self {
+        case .quit: return "/quit"
+        case .exit: return "/exit"
+        }
+    }
+
+    var buttonLabel: String {
+        switch self {
+        case .quit: return "Quit"
+        case .exit: return "Exit"
+        }
+    }
+}
+
+struct AgentTerminalControlProfile: Sendable {
+    let supportsInterrupt: Bool
+    let exitCommand: AgentExitCommand?
+}
+
 enum ApprovalPolicy: String, Codable, CaseIterable, Sendable {
     case deny
     case allowOnce
@@ -23,6 +47,24 @@ enum ApprovalPolicy: String, Codable, CaseIterable, Sendable {
     }
 }
 
+enum ApprovalAction: String, CaseIterable, Sendable {
+    case deny
+    case allowOnce
+    case allowAlways
+    case autoExecute
+    case terminal
+
+    var label: String {
+        switch self {
+        case .deny: return "Deny"
+        case .allowOnce: return "Allow Once"
+        case .allowAlways: return "Allow Always"
+        case .autoExecute: return "Auto Execute"
+        case .terminal: return "Jump to Terminal"
+        }
+    }
+}
+
 enum ApprovalCapabilityKind: String, Codable, Sendable {
     case nativeInteractive
     case terminalOnly
@@ -32,6 +74,7 @@ enum ApprovalCapabilityKind: String, Codable, Sendable {
 struct ApprovalCapability: Sendable {
     let kind: ApprovalCapabilityKind
     let supportedPolicies: [ApprovalPolicy]
+    let supportedActions: [ApprovalAction]
 }
 
 enum AgentPlatform: String, Codable, CaseIterable, Sendable {
@@ -71,17 +114,40 @@ enum AgentPlatform: String, Codable, CaseIterable, Sendable {
         case .claude:
             return ApprovalCapability(
                 kind: .nativeInteractive,
-                supportedPolicies: [.deny, .allowOnce, .allowAlways, .autoExecute]
+                supportedPolicies: [.deny, .allowOnce, .allowAlways, .autoExecute],
+                supportedActions: [.deny, .allowOnce, .allowAlways, .autoExecute]
             )
         case .codex:
             return ApprovalCapability(
                 kind: .nativeInteractive,
-                supportedPolicies: [.deny, .allowOnce, .allowAlways, .autoExecute]
+                supportedPolicies: [.deny, .allowOnce],
+                supportedActions: [.deny, .allowOnce]
             )
         case .gemini:
             return ApprovalCapability(
                 kind: .terminalOnly,
-                supportedPolicies: [.deny, .allowOnce]
+                supportedPolicies: [.deny, .allowOnce],
+                supportedActions: [.terminal]
+            )
+        }
+    }
+
+    nonisolated var terminalControlProfile: AgentTerminalControlProfile {
+        switch self {
+        case .claude:
+            return AgentTerminalControlProfile(
+                supportsInterrupt: true,
+                exitCommand: .exit
+            )
+        case .codex:
+            return AgentTerminalControlProfile(
+                supportsInterrupt: true,
+                exitCommand: .quit
+            )
+        case .gemini:
+            return AgentTerminalControlProfile(
+                supportsInterrupt: true,
+                exitCommand: .quit
             )
         }
     }

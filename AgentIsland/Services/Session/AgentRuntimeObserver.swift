@@ -14,15 +14,20 @@ protocol AgentRuntimeObserverDelegate: AnyObject {
 protocol AgentInteractionAdapter: Sendable {
     var agentType: AgentPlatform { get }
     nonisolated var supportsMessaging: Bool { get }
+    nonisolated var supportsSessionControl: Bool { get }
     nonisolated func canSendMessages(in session: SessionState) -> Bool
     func sendMessage(_ message: String, in session: SessionState) async -> Bool
+    nonisolated func canInterruptTurn(in session: SessionState) -> Bool
+    func interruptTurn(in session: SessionState) async -> Bool
+    nonisolated func canTerminateSession(in session: SessionState) -> Bool
+    func terminateSession(in session: SessionState) async -> Bool
 }
 
 @MainActor
 protocol AgentRuntimeObserver: AnyObject {
     var agentType: AgentPlatform { get }
     var delegate: AgentRuntimeObserverDelegate? { get set }
-    func startObserving(sessionId: String, cwd: String)
+    func startObserving(sessionId: String, cwd: String, transcriptPath: String?)
     func stopObserving(sessionId: String)
     func stopAll()
 }
@@ -35,8 +40,10 @@ final class AgentRuntimeObserverRegistry {
 
     private init() {
         let claudeObserver = ClaudeRuntimeObserver()
+        let codexObserver = CodexRuntimeObserver()
         self.observers = [
-            .claude: claudeObserver
+            .claude: claudeObserver,
+            .codex: codexObserver
         ]
     }
 
@@ -46,7 +53,7 @@ final class AgentRuntimeObserverRegistry {
 
     nonisolated func supportsObservation(for agentType: AgentPlatform) -> Bool {
         switch agentType {
-        case .claude:
+        case .claude, .codex:
             return true
         default:
             return false
@@ -70,7 +77,7 @@ private final class ClaudeRuntimeObserver: NSObject, AgentRuntimeObserver {
         }
     }
 
-    func startObserving(sessionId: String, cwd: String) {
+    func startObserving(sessionId: String, cwd: String, transcriptPath: String?) {
         InterruptWatcherManager.shared.startWatching(sessionId: sessionId, cwd: cwd)
     }
 
@@ -91,6 +98,40 @@ extension ClaudeRuntimeObserver: JSONLInterruptWatcherDelegate {
     }
 }
 
+@MainActor
+private final class CodexRuntimeObserver: NSObject, AgentRuntimeObserver {
+    let agentType: AgentPlatform = .codex
+
+    weak var delegate: AgentRuntimeObserverDelegate? {
+        didSet {
+            CodexInterruptWatcherManager.shared.delegate = self
+        }
+    }
+
+    func startObserving(sessionId: String, cwd: String, transcriptPath: String?) {
+        CodexInterruptWatcherManager.shared.startWatching(
+            sessionId: sessionId,
+            transcriptPath: transcriptPath
+        )
+    }
+
+    func stopObserving(sessionId: String) {
+        CodexInterruptWatcherManager.shared.stopWatching(sessionId: sessionId)
+    }
+
+    func stopAll() {
+        CodexInterruptWatcherManager.shared.stopAll()
+    }
+}
+
+extension CodexRuntimeObserver: CodexInterruptWatcherDelegate {
+    nonisolated func didDetectInterrupt(sessionId: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.didDetectInterrupt(sessionId: sessionId)
+        }
+    }
+}
+
 struct AgentInteractionRegistry {
     nonisolated static let shared = AgentInteractionRegistry()
 
@@ -98,21 +139,23 @@ struct AgentInteractionRegistry {
         let supportsConversationHistory: Bool
         let supportsRuntimeObservation: Bool
         let supportsMessaging: Bool
+        let supportsSessionControl: Bool
     }
 
-    private let runtimeObservationAgents: Set<AgentPlatform> = [.claude]
+    private let runtimeObservationAgents: Set<AgentPlatform> = [.claude, .codex]
 
     private let adapters: [AgentPlatform: any AgentInteractionAdapter] = [
-        .claude: TmuxAgentInteractionAdapter(agentType: .claude),
-        .codex: TmuxAgentInteractionAdapter(agentType: .codex),
-        .gemini: UnsupportedAgentInteractionAdapter(agentType: .gemini)
+        .claude: TmuxAgentInteractionAdapter(agentType: .claude, supportsMessaging: true),
+        .codex: TmuxAgentInteractionAdapter(agentType: .codex, supportsMessaging: true),
+        .gemini: TmuxAgentInteractionAdapter(agentType: .gemini, supportsMessaging: false)
     ]
 
     nonisolated func capabilities(for agentType: AgentPlatform) -> Capabilities {
         Capabilities(
             supportsConversationHistory: SessionTranscriptProviderRegistry.shared.supportsHistory(for: agentType),
             supportsRuntimeObservation: runtimeObservationAgents.contains(agentType),
-            supportsMessaging: adapter(for: agentType)?.supportsMessaging ?? false
+            supportsMessaging: adapter(for: agentType)?.supportsMessaging ?? false,
+            supportsSessionControl: adapter(for: agentType)?.supportsSessionControl ?? false
         )
     }
 
@@ -121,12 +164,12 @@ struct AgentInteractionRegistry {
     }
 
     @MainActor
-    func startObservingIfSupported(sessionId: String, agentType: AgentPlatform, cwd: String) {
+    func startObservingIfSupported(sessionId: String, agentType: AgentPlatform, cwd: String, transcriptPath: String?) {
         guard capabilities(for: agentType).supportsRuntimeObservation else { return }
 
         AgentRuntimeObserverRegistry.shared
             .observer(for: agentType)?
-            .startObserving(sessionId: sessionId, cwd: cwd)
+            .startObserving(sessionId: sessionId, cwd: cwd, transcriptPath: transcriptPath)
     }
 
     @MainActor
@@ -150,6 +193,30 @@ struct AgentInteractionRegistry {
         return await adapter.sendMessage(message, in: session)
     }
 
+    nonisolated func canInterruptTurn(for session: SessionState) -> Bool {
+        adapter(for: session.agentType)?.canInterruptTurn(in: session) ?? false
+    }
+
+    func interruptTurn(for session: SessionState) async -> Bool {
+        guard let adapter = adapter(for: session.agentType) else {
+            return false
+        }
+
+        return await adapter.interruptTurn(in: session)
+    }
+
+    nonisolated func canTerminateSession(for session: SessionState) -> Bool {
+        adapter(for: session.agentType)?.canTerminateSession(in: session) ?? false
+    }
+
+    func terminateSession(for session: SessionState) async -> Bool {
+        guard let adapter = adapter(for: session.agentType) else {
+            return false
+        }
+
+        return await adapter.terminateSession(in: session)
+    }
+
     private nonisolated func adapter(for agentType: AgentPlatform) -> (any AgentInteractionAdapter)? {
         adapters[agentType]
     }
@@ -157,10 +224,11 @@ struct AgentInteractionRegistry {
 
 private struct TmuxAgentInteractionAdapter: AgentInteractionAdapter {
     let agentType: AgentPlatform
-    let supportsMessaging = true
+    let supportsMessaging: Bool
+    let supportsSessionControl = true
 
     nonisolated func canSendMessages(in session: SessionState) -> Bool {
-        session.isInTmux && session.tty != nil
+        supportsMessaging && session.isInTmux && session.tty != nil
     }
 
     func sendMessage(_ message: String, in session: SessionState) async -> Bool {
@@ -171,17 +239,68 @@ private struct TmuxAgentInteractionAdapter: AgentInteractionAdapter {
 
         return await TmuxController.shared.sendMessage(message, to: target)
     }
+
+    nonisolated func canInterruptTurn(in session: SessionState) -> Bool {
+        agentType.terminalControlProfile.supportsInterrupt && session.isInTmux && session.tty != nil
+    }
+
+    func interruptTurn(in session: SessionState) async -> Bool {
+        guard canInterruptTurn(in: session),
+              let tty = session.tty,
+              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+            return false
+        }
+
+        return await TmuxController.shared.sendSpecialKey(.escape, to: target)
+    }
+
+    nonisolated func canTerminateSession(in session: SessionState) -> Bool {
+        agentType.terminalControlProfile.exitCommand != nil && session.isInTmux && session.tty != nil
+    }
+
+    func terminateSession(in session: SessionState) async -> Bool {
+        guard canTerminateSession(in: session),
+              let exitCommand = agentType.terminalControlProfile.exitCommand,
+              let tty = session.tty,
+              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+            return false
+        }
+
+        if session.phase.isActive || session.phase.isWaitingForApproval {
+            _ = await TmuxController.shared.sendSpecialKey(.escape, to: target)
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+
+        return await TmuxController.shared.sendMessage(exitCommand.text, to: target)
+    }
 }
 
 private struct UnsupportedAgentInteractionAdapter: AgentInteractionAdapter {
     let agentType: AgentPlatform
     let supportsMessaging = false
+    let supportsSessionControl = false
 
     nonisolated func canSendMessages(in session: SessionState) -> Bool {
         false
     }
 
     func sendMessage(_ message: String, in session: SessionState) async -> Bool {
+        false
+    }
+
+    nonisolated func canInterruptTurn(in session: SessionState) -> Bool {
+        false
+    }
+
+    func interruptTurn(in session: SessionState) async -> Bool {
+        false
+    }
+
+    nonisolated func canTerminateSession(in session: SessionState) -> Bool {
+        false
+    }
+
+    func terminateSession(in session: SessionState) async -> Bool {
         false
     }
 }

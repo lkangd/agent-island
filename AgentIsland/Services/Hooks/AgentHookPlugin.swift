@@ -6,6 +6,16 @@
 //
 
 import Foundation
+import CryptoKit
+
+private let defaultCodexDangerousCommandPatterns: [String] = [
+    #"(^|\s)(sudo|su)\b"#,
+    #"(^|\s)(rm|mv|cp)\s+.*(/|~)"#,
+    #"(^|\s)(chmod|chown|chgrp)\b"#,
+    #"(^|\s)(kill|pkill|killall|launchctl)\b"#,
+    #"(^|\s)(shutdown|reboot|halt)\b"#,
+    #"(^|\s)(dd|mkfs|diskutil)\b"#
+]
 
 protocol AgentHookPlugin {
     var agentType: AgentPlatform { get }
@@ -55,7 +65,7 @@ enum AgentBridgeDistributionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingSource:
-            return "Rust bridge binary not found. Build bridge-rs first."
+            return "Bundled bridge binary not found in the app bundle."
         case .invalidSource(let path):
             return "Invalid bridge source path: \(path)"
         case .cannotCreateDirectory(let path):
@@ -83,7 +93,9 @@ struct AgentHookCapabilities: Sendable {
             agentType: "",
             responseMode: responseMode,
             approvalTools: approvalTools,
-            approvalCommandPatterns: approvalCommandPatterns
+            approvalCommandPatterns: approvalCommandPatterns,
+            autoApproveTools: [],
+            autoApproveCommandPatterns: []
         )
     }
 }
@@ -93,6 +105,8 @@ struct AgentBridgeProfile: Codable {
     let responseMode: String
     let approvalTools: [String]
     let approvalCommandPatterns: [String]
+    let autoApproveTools: [String]
+    let autoApproveCommandPatterns: [String]
 }
 
 struct HookPluginContext {
@@ -113,7 +127,8 @@ struct HookPluginContext {
     }
 
     func bridgeCommand(for agent: AgentPlatform) -> String {
-        "\"\(sharedHooksDir.appendingPathComponent(sharedBridgeName).path)\" --source \(agent.rawValue)"
+        let logPath = installRoot.appendingPathComponent("bridge-debug.log").path
+        return "AGENT_ISLAND_BRIDGE_LOG=\"\(logPath)\" \"\(sharedHooksDir.appendingPathComponent(sharedBridgeName).path)\" --source \(agent.rawValue)"
     }
 
     private func preferredResourceBridgeURL() -> URL? {
@@ -149,52 +164,7 @@ struct HookPluginContext {
     }
 
     func preferredRustBridgeSourceURL() -> URL? {
-        let environment = Foundation.ProcessInfo.processInfo.environment
-
-        if let override = environment["AGENT_ISLAND_BRIDGE_BINARY"] {
-            let expandedOverride = NSString(string: override).expandingTildeInPath
-            if fileManager.fileExists(atPath: expandedOverride) {
-                return URL(fileURLWithPath: expandedOverride)
-            }
-        }
-
-        if let resourceBridge = preferredResourceBridgeURL() {
-            return resourceBridge
-        }
-
-        let installedBridge = sharedHooksDir.appendingPathComponent(sharedBridgeName)
-        if fileManager.fileExists(atPath: installedBridge.path) {
-            return installedBridge
-        }
-
-        let legacyInstalledBridge = homeDirectory
-            .appendingPathComponent(".agent-island/hooks")
-            .appendingPathComponent("agent-island-bridge")
-        if fileManager.fileExists(atPath: legacyInstalledBridge.path) {
-            return legacyInstalledBridge
-        }
-
-        let appInstallPaths = [
-            "/Applications/Agent Island.app/Contents/Resources/\(sharedBridgeName)",
-            "/Applications/AgentIsland.app/Contents/Resources/\(sharedBridgeName)"
-        ]
-        for path in appInstallPaths where fileManager.fileExists(atPath: path) {
-            return URL(fileURLWithPath: path)
-        }
-
-        let cwd = fileManager.currentDirectoryPath
-        let candidates = [
-            "\(cwd)/bridge-rs/target/release/\(sharedBridgeName)",
-            "\(cwd)/target/release/\(sharedBridgeName)",
-            "\(cwd)/bridge-rs/target/release/agent-island-bridge",
-            "\(cwd)/target/release/agent-island-bridge"
-        ]
-
-        for candidate in candidates where fileManager.fileExists(atPath: candidate) {
-            return URL(fileURLWithPath: candidate)
-        }
-
-        return nil
+        preferredResourceBridgeURL()
     }
 
     func requiredRustBridgeSourceURL() throws -> URL {
@@ -223,11 +193,11 @@ struct HookPluginContext {
         print("Agent bridge source: \(sourcePath)")
         print("Agent bridge target: \(targetPath)")
 
-        let shouldCopyBridge = sourcePath != targetPath
-        if shouldCopyBridge || !fileManager.fileExists(atPath: targetPath) {
-            if shouldCopyBridge && fileManager.fileExists(atPath: targetPath) {
-                try? fileManager.removeItem(at: bridgeURL)
-            }
+        let sourceHash = bridgeBinaryHash(at: rustBridge)
+        let targetHash = bridgeBinaryHash(at: bridgeURL)
+        let shouldCopyBridge = !fileManager.fileExists(atPath: targetPath) || sourceHash != targetHash
+
+        if shouldCopyBridge {
             if fileManager.fileExists(atPath: targetPath) {
                 try? fileManager.removeItem(at: bridgeURL)
             }
@@ -237,9 +207,17 @@ struct HookPluginContext {
                 print("Failed copying bridge binary: \(error)")
                 throw AgentBridgeDistributionError.copyFailed(targetPath)
             }
-            print("Agent bridge copied to: \(targetPath)")
+            if let sourceHash {
+                print("Agent bridge copied to: \(targetPath) sha256=\(sourceHash)")
+            } else {
+                print("Agent bridge copied to: \(targetPath)")
+            }
         } else {
-            print("Agent bridge already exists at target path: \(targetPath)")
+            if let targetHash {
+                print("Agent bridge unchanged at target path: \(targetPath) sha256=\(targetHash)")
+            } else {
+                print("Agent bridge unchanged at target path: \(targetPath)")
+            }
         }
 
         do {
@@ -257,6 +235,12 @@ struct HookPluginContext {
         }
 
         removeLegacyBridgeArtifacts()
+    }
+
+    private func bridgeBinaryHash(at url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     func backupFileIfNeeded(at url: URL) throws {
@@ -395,16 +379,68 @@ struct HookPluginContext {
     }
 
     func writeDerivedBridgeProfile(for plugin: any AgentHookPlugin) throws {
+        try writeDerivedBridgeProfile(for: plugin, rules: [])
+    }
+
+    func writeDerivedBridgeProfile(for plugin: any AgentHookPlugin, rules: [ApprovalRule]) throws {
         guard let baseProfile = plugin.capabilities.bridgeProfile else { return }
+        let autoApproveCommandPatterns = derivedAutoApproveCommandPatterns(for: plugin.agentType, rules: rules)
+        let approvalCommandPatterns = derivedApprovalCommandPatterns(for: plugin.agentType, basePatterns: baseProfile.approvalCommandPatterns)
         try writeBridgeProfile(
             AgentBridgeProfile(
                 agentType: plugin.agentType.rawValue,
                 responseMode: baseProfile.responseMode,
                 approvalTools: baseProfile.approvalTools,
-                approvalCommandPatterns: baseProfile.approvalCommandPatterns
+                approvalCommandPatterns: approvalCommandPatterns,
+                autoApproveTools: [],
+                autoApproveCommandPatterns: autoApproveCommandPatterns
             ),
             for: plugin.agentType
         )
+    }
+
+    private func derivedApprovalCommandPatterns(for agentType: AgentPlatform, basePatterns: [String]) -> [String] {
+        switch agentType {
+        case .codex:
+            return Array(Set(basePatterns + AppSettings.codexDangerousCommandPatterns)).sorted()
+        case .claude, .gemini:
+            return basePatterns
+        }
+    }
+
+    private func derivedAutoApproveCommandPatterns(for agentType: AgentPlatform, rules: [ApprovalRule]) -> [String] {
+        guard agentType == .codex else { return [] }
+
+        let patterns = rules.compactMap { rule -> String? in
+            guard rule.agentType == .codex,
+                  rule.policy == .autoExecute,
+                  rule.toolName == "Bash",
+                  let command = Self.commandText(fromInputSignature: rule.inputSignature),
+                  !command.isEmpty else {
+                return nil
+            }
+
+            return "^\(NSRegularExpression.escapedPattern(for: command))$"
+        }
+
+        return Array(Set(patterns)).sorted()
+    }
+
+    private static func commandText(fromInputSignature signature: String) -> String? {
+        guard let data = signature.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        if let command = json["command"] as? String, !command.isEmpty {
+            return command
+        }
+
+        if let command = json["cmd"] as? String, !command.isEmpty {
+            return command
+        }
+
+        return nil
     }
 }
 
@@ -508,6 +544,8 @@ final class AgentHookPluginManager {
                 print("Failed to install \(plugin.agentType.displayName) hooks: \(error)")
             }
         }
+
+        refreshBridgeProfilesFromApprovalRules()
     }
 
     @discardableResult
@@ -517,6 +555,7 @@ final class AgentHookPluginManager {
         setEnabled(true, for: agentType)
         do {
             try plugin.install(in: context)
+            refreshBridgeProfilesFromApprovalRules()
             return nil
         } catch {
             print("Failed to install \(plugin.agentType.displayName) hooks: \(error)")
@@ -578,6 +617,7 @@ final class AgentHookPluginManager {
         setEnabled(true, for: agentType)
         do {
             try plugin.repair(in: context)
+            refreshBridgeProfilesFromApprovalRules()
             return nil
         } catch {
             print("Failed to repair \(plugin.agentType.displayName) hooks: \(error)")
@@ -595,6 +635,23 @@ final class AgentHookPluginManager {
 
     private func enabledPreferenceKey(for agentType: AgentPlatform) -> String {
         enabledPreferencePrefix + agentType.rawValue
+    }
+
+    func refreshBridgeProfilesFromApprovalRules() {
+        Task {
+            let rules = await ApprovalPolicyStore.shared.allRules()
+            refreshBridgeProfiles(using: rules)
+        }
+    }
+
+    func refreshBridgeProfiles(using rules: [ApprovalRule]) {
+        for plugin in plugins where plugin.isAvailable(in: context) && isEnabled(agentType: plugin.agentType) {
+            do {
+                try context.writeDerivedBridgeProfile(for: plugin, rules: rules)
+            } catch {
+                print("Failed to sync \(plugin.agentType.displayName) bridge profile: \(error)")
+            }
+        }
     }
 }
 
@@ -794,14 +851,7 @@ private struct CodexHookPlugin: AgentHookPlugin {
             HookEventKey.stop
         ],
         approvalTools: [],
-        approvalCommandPatterns: [
-            #"(^|\s)(sudo|su)\b"#,
-            #"(^|\s)(rm|mv|cp)\s+.*(/|~)"#,
-            #"(^|\s)(chmod|chown|chgrp)\b"#,
-            #"(^|\s)(kill|pkill|killall|launchctl)\b"#,
-            #"(^|\s)(shutdown|reboot|halt)\b"#,
-            #"(^|\s)(dd|mkfs|diskutil)\b"#
-        ],
+        approvalCommandPatterns: defaultCodexDangerousCommandPatterns,
         responseMode: "codex",
         permissionRequestSource: .preToolUse,
         supportsPermissionDecisions: true,

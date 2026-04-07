@@ -24,6 +24,8 @@ struct ChatView: View {
     @State private var newMessageCount: Int = 0
     @State private var previousHistoryCount: Int = 0
     @State private var isBottomVisible: Bool = true
+    @State private var isInterruptingTurn: Bool = false
+    @State private var isTerminatingSession: Bool = false
     @FocusState private var isInputFocused: Bool
 
     init(sessionId: String, initialSession: SessionState, sessionMonitor: AgentSessionMonitor, viewModel: NotchViewModel) {
@@ -49,9 +51,17 @@ struct ChatView: View {
         session.phase.approvalToolName
     }
 
-    /// Codex approvals must be confirmed in terminal rather than in-app
     private var usesTerminalApprovalUI: Bool {
-        isWaitingForApproval && session.usesTerminalApproval
+        isWaitingForApproval && session.agentType.approvalCapability.supportedActions == [.terminal]
+    }
+
+    private var canInterruptTurn: Bool {
+        AgentInteractionRegistry.shared.canInterruptTurn(for: session)
+            && (session.phase.isActive || session.phase.isWaitingForApproval)
+    }
+
+    private var canTerminateSession: Bool {
+        AgentInteractionRegistry.shared.canTerminateSession(for: session)
     }
 
     
@@ -188,6 +198,23 @@ struct ChatView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                if canInterruptTurn {
+                    headerControlButton(
+                        title: "Esc",
+                        isBusy: isInterruptingTurn,
+                        action: interruptTurn
+                    )
+                }
+
+                if canTerminateSession,
+                   let exitLabel = session.agentType.terminalControlProfile.exitCommand?.buttonLabel {
+                    headerControlButton(
+                        title: exitLabel,
+                        isBusy: isTerminatingSession,
+                        action: terminateSession
+                    )
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -212,6 +239,26 @@ struct ChatView: View {
             .allowsHitTesting(false)
         }
         .zIndex(1) // Render above message list
+    }
+
+    private func headerControlButton(title: String, isBusy: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(isBusy ? "..." : title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.08))
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
     }
 
     /// Whether the session is currently processing
@@ -425,8 +472,10 @@ struct ChatView: View {
         ChatApprovalBar(
             tool: tool,
             toolInput: session.pendingToolInput,
-            supportedPolicies: session.agentType.approvalCapability.supportedPolicies,
-            onPolicy: { policy in executeApprovalPolicy(policy) }
+            agentType: session.agentType,
+            supportedActions: session.agentType.approvalCapability.supportedActions,
+            isInTmux: session.isInTmux,
+            onAction: { action in handleApprovalAction(action) }
         )
     }
 
@@ -486,6 +535,21 @@ struct ChatView: View {
         viewModel.notchClose()
     }
 
+    private func handleApprovalAction(_ action: ApprovalAction) {
+        switch action {
+        case .deny:
+            executeApprovalPolicy(.deny)
+        case .allowOnce:
+            executeApprovalPolicy(.allowOnce)
+        case .allowAlways:
+            executeApprovalPolicy(.allowAlways)
+        case .autoExecute:
+            executeApprovalPolicy(.autoExecute)
+        case .terminal:
+            focusTerminal()
+        }
+    }
+
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -504,6 +568,30 @@ struct ChatView: View {
 
     private func sendToSession(_ text: String) async {
         _ = await AgentInteractionRegistry.shared.sendMessage(text, for: session)
+    }
+
+    private func interruptTurn() {
+        guard !isInterruptingTurn else { return }
+
+        isInterruptingTurn = true
+        Task {
+            _ = await AgentInteractionRegistry.shared.interruptTurn(for: session)
+            await MainActor.run {
+                isInterruptingTurn = false
+            }
+        }
+    }
+
+    private func terminateSession() {
+        guard !isTerminatingSession else { return }
+
+        isTerminatingSession = true
+        Task {
+            _ = await AgentInteractionRegistry.shared.terminateSession(for: session)
+            await MainActor.run {
+                isTerminatingSession = false
+            }
+        }
     }
 
     private static func filteredHistoryItems(from session: SessionState) -> [ChatHistoryItem] {
@@ -1041,7 +1129,7 @@ struct ChatInteractivePromptBar: View {
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundColor(TerminalColors.amber)
                         .fixedSize()
-                    Text("\(agentName) needs your input in Terminal")
+                    Text(isInTmux ? "\(agentName) needs your input in Terminal" : "Terminal jump unavailable for this session")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
@@ -1058,7 +1146,7 @@ struct ChatInteractivePromptBar: View {
                 HStack(spacing: 4) {
                     Image(agentIcon: "terminal")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Terminal")
+                    Text(isInTmux ? "Jump to Terminal" : "Terminal unavailable")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
@@ -1099,8 +1187,10 @@ struct ChatInteractivePromptBar: View {
 struct ChatApprovalBar: View {
     let tool: String
     let toolInput: String?
-    let supportedPolicies: [ApprovalPolicy]
-    let onPolicy: (ApprovalPolicy) -> Void
+    let agentType: AgentPlatform
+    let supportedActions: [ApprovalAction]
+    let isInTmux: Bool
+    let onAction: (ApprovalAction) -> Void
 
     @State private var showContent = false
     @State private var showButtons = false
@@ -1112,7 +1202,7 @@ struct ChatApprovalBar: View {
                     Circle()
                         .fill(TerminalColors.amber)
                         .frame(width: 7, height: 7)
-                    Text("Permission Request")
+                    Text(agentType == .codex ? "Confirm Command" : "Permission Request")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.55))
                 }
@@ -1129,30 +1219,37 @@ struct ChatApprovalBar: View {
                             .foregroundColor(.white.opacity(0.78))
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("This action needs your approval before continuing.")
+                        Text(agentType == .codex ? "Review this command before Codex continues." : "This action needs your approval before continuing.")
                             .font(.system(size: 12))
                             .foregroundColor(.white.opacity(0.65))
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+
+                if agentType == .codex {
+                    Text("Continue will let Codex run this command immediately.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.42))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .opacity(showContent ? 1 : 0)
             .offset(x: showContent ? 0 : -10)
 
             HStack(spacing: 8) {
-                ForEach(ApprovalPolicy.allCases, id: \.self) { policy in
-                    let isEnabled = supportedPolicies.contains(policy)
+                ForEach(supportedActions, id: \.self) { action in
+                    let isEnabled = action != .terminal || isInTmux
                     Button {
                         if isEnabled {
-                            onPolicy(policy)
+                            onAction(action)
                         }
                     } label: {
-                        Text(label(for: policy))
+                        buttonLabel(for: action, isEnabled: isEnabled)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(foregroundColor(for: policy, isEnabled: isEnabled))
+                            .foregroundColor(foregroundColor(for: action, isEnabled: isEnabled))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
-                            .background(backgroundColor(for: policy, isEnabled: isEnabled))
+                            .background(backgroundColor(for: action, isEnabled: isEnabled))
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -1183,29 +1280,33 @@ struct ChatApprovalBar: View {
         }
     }
 
-    private func label(for policy: ApprovalPolicy) -> String {
-        switch policy {
-        case .deny: return "Deny"
-        case .allowOnce: return "Allow Once"
-        case .allowAlways: return "Allow Always"
-        case .autoExecute: return "Auto Execute"
+    @ViewBuilder
+    private func buttonLabel(for action: ApprovalAction, isEnabled: Bool) -> some View {
+        if action == .terminal {
+            HStack(spacing: 4) {
+                Image(agentIcon: "terminal")
+                    .font(.system(size: 11, weight: .medium))
+                Text(isEnabled ? action.label : "Terminal unavailable")
+            }
+        } else {
+            Text(agentType == .codex && action == .allowOnce ? "Continue" : action.label)
         }
     }
 
-    private func foregroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func foregroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return .white.opacity(0.35) }
-        switch policy {
+        switch action {
         case .deny: return .white.opacity(0.75)
-        case .allowOnce, .allowAlways, .autoExecute: return .black
+        case .allowOnce, .allowAlways, .autoExecute, .terminal: return .black
         }
     }
 
-    private func backgroundColor(for policy: ApprovalPolicy, isEnabled: Bool) -> Color {
+    private func backgroundColor(for action: ApprovalAction, isEnabled: Bool) -> Color {
         guard isEnabled else { return Color.white.opacity(0.08) }
-        switch policy {
+        switch action {
         case .deny:
             return Color.white.opacity(0.12)
-        case .allowOnce:
+        case .allowOnce, .terminal:
             return Color.white.opacity(0.95)
         case .allowAlways:
             return Color(red: 0.95, green: 0.60, blue: 0.18)
@@ -1242,7 +1343,7 @@ struct ChatTerminalApprovalBar: View {
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundColor(TerminalColors.amber)
                         .fixedSize()
-                    Text(toolInput ?? "\(agentName) needs approval in Terminal")
+                    Text(toolInput ?? (isInTmux ? "\(agentName) needs approval in Terminal" : "Terminal jump unavailable for this session"))
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
@@ -1257,7 +1358,7 @@ struct ChatTerminalApprovalBar: View {
                 HStack(spacing: 4) {
                     Image(agentIcon: "terminal")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Terminal")
+                    Text(isInTmux ? "Jump to Terminal" : "Terminal unavailable")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
