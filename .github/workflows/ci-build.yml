@@ -93,6 +93,26 @@ jobs:
           name: agentisland-macos-artifacts
           path: build/artifacts
 
+      - name: Locate release assets
+        id: assets
+        run: |
+          set -euo pipefail
+          echo "Downloaded artifacts:"
+          find build/artifacts -maxdepth 4 -type f | sort
+
+          DMG_PATH="$(find build/artifacts -type f -name "AgentIsland-${GITHUB_REF_NAME}.dmg" | head -n 1)"
+          ZIP_PATH="$(find build/artifacts -type f -name "AgentIsland-${GITHUB_REF_NAME}-unsigned.zip" | head -n 1)"
+
+          if [ -z "$DMG_PATH" ]; then
+            echo "Unable to locate DMG for tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          if [ -n "$ZIP_PATH" ]; then
+            echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve Swift package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
@@ -118,12 +138,12 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: AgentIsland ${{ github.ref_name }}
           files: |
-            build/artifacts/AgentIsland-${{ github.ref_name }}.dmg
+            ${{ steps.assets.outputs.dmg_path }}
 
       - name: Generate Sparkle appcast for GitHub Pages
         env:
           VERSION_TAG: ${{ github.ref_name }}
-          DMG_PATH: build/artifacts/AgentIsland-${{ github.ref_name }}.dmg
+          DMG_PATH: ${{ steps.assets.outputs.dmg_path }}
           OUTPUT_DIR: build/pages
           SPARKLE_PRIVATE_KEY_FILE: .sparkle-keys/eddsa_private_key
           GITHUB_REPO: ${{ github.repository }}
