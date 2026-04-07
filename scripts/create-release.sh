@@ -87,12 +87,25 @@ echo ""
 echo "=== Step 2: Creating DMG ==="
 
 DMG_PATH="$RELEASE_DIR/$APP_NAME-$VERSION.dmg"
+DMG_STAGING_DIR="$BUILD_DIR/dmg-staging"
 
 # Remove existing DMG if present
 if [ -f "$DMG_PATH" ]; then
     echo "Removing existing DMG..."
     rm -f "$DMG_PATH"
 fi
+
+rm -rf "$DMG_STAGING_DIR"
+mkdir -p "$DMG_STAGING_DIR"
+cp -R "$APP_PATH" "$DMG_STAGING_DIR/"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
+cat > "$DMG_STAGING_DIR/README.txt" <<'EOF'
+AgentIsland Installation Notes
+
+If macOS says the app cannot be opened, run:
+
+xattr -cr "/Applications/Agent Island.app"
+EOF
 
 # Check if create-dmg is available (prettier DMG)
 if command -v create-dmg &> /dev/null; then
@@ -105,11 +118,11 @@ if command -v create-dmg &> /dev/null; then
         --app-drop-link 450 200 \
         --hide-extension "Agent Island.app" \
         "$DMG_PATH" \
-        "$APP_PATH"
+        "$DMG_STAGING_DIR"
 else
     echo "Using hdiutil (install create-dmg for prettier DMG: brew install create-dmg)"
     hdiutil create -volname "AgentIsland" \
-        -srcfolder "$APP_PATH" \
+        -srcfolder "$DMG_STAGING_DIR" \
         -ov -format UDZO \
         "$DMG_PATH"
 fi
