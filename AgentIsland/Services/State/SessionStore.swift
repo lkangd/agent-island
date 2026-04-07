@@ -129,7 +129,7 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         let sessionId = event.sessionId
-        let isNewSession = sessions[sessionId] == nil
+        let isNewSession = sessions.index(forKey: sessionId) == nil
         var session = sessions[sessionId] ?? createSession(from: event)
 
         // Track new session in Mixpanel
@@ -151,7 +151,7 @@ actor SessionStore {
         session.lastActivity = Date()
         applyHookConversationInfo(event: event, session: &session)
 
-        if event.status == "ended" {
+        if event.isSessionEnded {
             if await shouldRetainEndedSession(session) {
                 applyPhaseUpdate(
                     to: &session,
@@ -172,12 +172,12 @@ actor SessionStore {
         processToolTracking(event: event, session: &session)
         processSubagentTracking(event: event, session: &session)
 
-        if (event.expectsResponse || event.requiresTerminalApproval), let toolUseId = event.toolUseId {
+        if event.shouldAwaitPermissionResponse, let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             ToolEventProcessor.updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
         }
 
-        if event.event == "Stop" {
+        if case .stop = event.domainEvent {
             session.subagentState = SubagentState()
         }
 
@@ -232,8 +232,8 @@ actor SessionStore {
 
         var info = session.conversationInfo
 
-        switch event.event {
-        case "UserPromptSubmit":
+        switch event.domainEvent {
+        case .userPromptSubmit:
             if info.firstUserMessage == nil {
                 info = ConversationInfo(
                     summary: info.summary,
@@ -253,7 +253,7 @@ actor SessionStore {
                     lastUserMessageDate: Date()
                 )
             }
-        case "Stop", "Notification":
+        case .stop, .notification(_):
             info = ConversationInfo(
                 summary: info.summary,
                 lastMessage: message,
@@ -270,8 +270,8 @@ actor SessionStore {
     }
 
     private func processToolTracking(event: HookEvent, session: inout SessionState) {
-        switch event.event {
-        case "PreToolUse":
+        switch event.domainEvent {
+        case .preToolUse:
             if let toolName = event.tool,
                session.subagentState.hasActiveSubagent,
                toolName != "Task" {
@@ -279,7 +279,7 @@ actor SessionStore {
             }
             ToolEventProcessor.processPreToolUse(event: event, session: &session)
 
-        case "PostToolUse":
+        case .postToolUse:
             ToolEventProcessor.processPostToolUse(event: event, session: &session)
 
         default:
@@ -288,20 +288,20 @@ actor SessionStore {
     }
 
     private func processSubagentTracking(event: HookEvent, session: inout SessionState) {
-        switch event.event {
-        case "PreToolUse":
+        switch event.domainEvent {
+        case .preToolUse:
             if event.tool == "Task", let toolUseId = event.toolUseId {
                 let description = event.toolInput?["description"]?.value as? String
                 session.subagentState.startTask(taskToolId: toolUseId, description: description)
                 Self.logger.debug("Started Task subagent tracking: \(toolUseId.prefix(12), privacy: .public)")
             }
 
-        case "PostToolUse":
+        case .postToolUse:
             if event.tool == "Task" {
                 Self.logger.debug("PostToolUse for Task received (subagent still running)")
             }
 
-        case "SubagentStop":
+        case .subagentStop:
             // SubagentStop fires when a subagent completes - stop tracking
             // Subagent tools are populated from agent file in processFileUpdated
             Self.logger.debug("SubagentStop received")
@@ -986,8 +986,7 @@ actor SessionStore {
         guard !pendingConversationHydrations.contains(sessionId) else { return }
         pendingConversationHydrations.insert(sessionId)
 
-        Task { [weak self] in
-            guard let self else { return }
+        Task {
             await DefaultCapabilityDispatcher.shared.handle(.historyLoadRequested(sessionId: sessionId, cwd: cwd))
         }
     }
@@ -1020,7 +1019,7 @@ actor SessionStore {
 
     private func publishState() {
         let sortedSessions = Array(sessions.values).sorted { $0.projectName < $1.projectName }
-        let sortedSummaries = sortedSessions.map(\.listState)
+        let sortedSummaries = sortedSessions.map { $0.listState }
         sessionsSubject.send(sortedSessions)
         sessionSummariesSubject.send(sortedSummaries)
         Task { @MainActor in

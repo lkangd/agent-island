@@ -12,14 +12,37 @@ protocol AgentHookPlugin {
     var capabilities: AgentHookCapabilities { get }
     func isAvailable(in context: HookPluginContext) -> Bool
     func install(in context: HookPluginContext) throws
+    func repair(in context: HookPluginContext) throws
     func uninstall(in context: HookPluginContext) throws
     func isInstalled(in context: HookPluginContext) -> Bool
     func diagnose(in context: HookPluginContext) -> AgentHookDiagnostic
 }
 
+private enum HookEventKey {
+    static let userPromptSubmit = HookEvent.EventName.userPromptSubmit.rawValue
+    static let preToolUse = HookEvent.EventName.preToolUse.rawValue
+    static let postToolUse = HookEvent.EventName.postToolUse.rawValue
+    static let permissionRequest = HookEvent.EventName.permissionRequest.rawValue
+    static let notification = HookEvent.EventName.notification.rawValue
+    static let stop = HookEvent.EventName.stop.rawValue
+    static let subagentStop = HookEvent.EventName.subagentStop.rawValue
+    static let sessionStart = HookEvent.EventName.sessionStart.rawValue
+    static let sessionEnd = HookEvent.EventName.sessionEnd.rawValue
+    static let preCompact = HookEvent.EventName.preCompact.rawValue
+    static let beforeTool = HookEvent.EventName.beforeTool.rawValue
+    static let afterTool = HookEvent.EventName.afterTool.rawValue
+}
+
+extension AgentHookPlugin {
+    func repair(in context: HookPluginContext) throws {
+        try install(in: context)
+    }
+}
+
 enum AgentPermissionRequestSource: String, Sendable {
     case nativeRequest
     case preToolUse
+    case beforeTool
 }
 
 enum AgentBridgeDistributionError: LocalizedError {
@@ -200,9 +223,11 @@ struct HookPluginContext {
         print("Agent bridge source: \(sourcePath)")
         print("Agent bridge target: \(targetPath)")
 
-        if sourcePath == targetPath {
-            print("Bridge source already points to shared hooks path, skipping copy")
-        } else {
+        let shouldCopyBridge = sourcePath != targetPath
+        if shouldCopyBridge || !fileManager.fileExists(atPath: targetPath) {
+            if shouldCopyBridge && fileManager.fileExists(atPath: targetPath) {
+                try? fileManager.removeItem(at: bridgeURL)
+            }
             if fileManager.fileExists(atPath: targetPath) {
                 try? fileManager.removeItem(at: bridgeURL)
             }
@@ -212,6 +237,9 @@ struct HookPluginContext {
                 print("Failed copying bridge binary: \(error)")
                 throw AgentBridgeDistributionError.copyFailed(targetPath)
             }
+            print("Agent bridge copied to: \(targetPath)")
+        } else {
+            print("Agent bridge already exists at target path: \(targetPath)")
         }
 
         do {
@@ -229,6 +257,26 @@ struct HookPluginContext {
         }
 
         removeLegacyBridgeArtifacts()
+    }
+
+    func backupFileIfNeeded(at url: URL) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try ensureDirectory(at: url.deletingLastPathComponent(), label: "config backup directory")
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let backupName = "\(url.lastPathComponent).agent-island-backup-\(timestamp)"
+        let backupURL = url.deletingLastPathComponent().appendingPathComponent(backupName)
+
+        if fileManager.fileExists(atPath: backupURL.path) {
+            try? fileManager.removeItem(at: backupURL)
+        }
+
+        do {
+            try fileManager.copyItem(at: url, to: backupURL)
+            print("Backed up config: \(url.path) -> \(backupURL.path)")
+        } catch {
+            throw AgentBridgeDistributionError.copyFailed(backupURL.path)
+        }
     }
 
     func ensureDirectory(at directoryURL: URL, label: String) throws {
@@ -474,7 +522,6 @@ final class AgentHookPluginManager {
             print("Failed to install \(plugin.agentType.displayName) hooks: \(error)")
             return error
         }
-        return nil
     }
 
     func uninstallAll() {
@@ -524,6 +571,20 @@ final class AgentHookPluginManager {
         }
     }
 
+    @discardableResult
+    func repair(agentType: AgentPlatform) -> Error? {
+        guard let plugin = plugin(for: agentType) else { return AgentHookInstallError.pluginNotFound }
+        guard plugin.isAvailable(in: context) else { return AgentHookInstallError.pluginUnavailable }
+        setEnabled(true, for: agentType)
+        do {
+            try plugin.repair(in: context)
+            return nil
+        } catch {
+            print("Failed to repair \(plugin.agentType.displayName) hooks: \(error)")
+            return error
+        }
+    }
+
     private func plugin(for agentType: AgentPlatform) -> (any AgentHookPlugin)? {
         plugins.first { $0.agentType == agentType }
     }
@@ -550,16 +611,16 @@ private struct ClaudeHookPlugin: AgentHookPlugin {
     let agentType: AgentPlatform = .claude
     let capabilities = AgentHookCapabilities(
         supportedEvents: [
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PostToolUse",
-            "PermissionRequest",
-            "Notification",
-            "Stop",
-            "SubagentStop",
-            "SessionStart",
-            "SessionEnd",
-            "PreCompact"
+            HookEventKey.userPromptSubmit,
+            HookEventKey.preToolUse,
+            HookEventKey.postToolUse,
+            HookEventKey.permissionRequest,
+            HookEventKey.notification,
+            HookEventKey.stop,
+            HookEventKey.subagentStop,
+            HookEventKey.sessionStart,
+            HookEventKey.sessionEnd,
+            HookEventKey.preCompact
         ],
         approvalTools: [],
         approvalCommandPatterns: [],
@@ -574,6 +635,32 @@ private struct ClaudeHookPlugin: AgentHookPlugin {
             || context.binaryExists("claude")
     }
 
+    private func claudeHookConfig(for context: HookPluginContext) -> [String: [[String: Any]] ] {
+        let command = context.bridgeCommand(for: .claude)
+        let hookEntry = [context.commandHook(command: command)]
+        let hookEntryWithTimeout = [context.commandHook(command: command, timeout: 86400)]
+        let withMatcher = [context.hookGroup(matcher: "*", hooks: hookEntry)]
+        let withMatcherAndTimeout = [context.hookGroup(matcher: "*", hooks: hookEntryWithTimeout)]
+        let withoutMatcher = [context.hookGroup(hooks: hookEntry)]
+        let preCompactConfig: [[String: Any]] = [
+            context.hookGroup(matcher: "auto", hooks: hookEntry),
+            context.hookGroup(matcher: "manual", hooks: hookEntry)
+        ]
+
+        return [
+            HookEventKey.userPromptSubmit: withoutMatcher,
+            HookEventKey.preToolUse: withMatcher,
+            HookEventKey.postToolUse: withMatcher,
+            HookEventKey.permissionRequest: withMatcherAndTimeout,
+            HookEventKey.notification: withMatcher,
+            HookEventKey.stop: withoutMatcher,
+            HookEventKey.subagentStop: withoutMatcher,
+            HookEventKey.sessionStart: withoutMatcher,
+            HookEventKey.sessionEnd: withoutMatcher,
+            HookEventKey.preCompact: preCompactConfig
+        ]
+    }
+
     func install(in context: HookPluginContext) throws {
         let claudeDir = context.homeDirectory.appendingPathComponent(".claude")
         let hooksDir = claudeDir.appendingPathComponent("hooks")
@@ -585,33 +672,10 @@ private struct ClaudeHookPlugin: AgentHookPlugin {
         try? context.fileManager.removeItem(at: hooksDir.appendingPathComponent("agent-island-state.py"))
 
         var json = context.readJSON(at: settings)
-        let command = context.bridgeCommand(for: .claude)
-
-        let hookEntry = [context.commandHook(command: command)]
-        let hookEntryWithTimeout = [context.commandHook(command: command, timeout: 86400)]
-        let withMatcher = [context.hookGroup(matcher: "*", hooks: hookEntry)]
-        let withMatcherAndTimeout = [context.hookGroup(matcher: "*", hooks: hookEntryWithTimeout)]
-        let withoutMatcher = [context.hookGroup(hooks: hookEntry)]
-        let preCompactConfig: [[String: Any]] = [
-            context.hookGroup(matcher: "auto", hooks: hookEntry),
-            context.hookGroup(matcher: "manual", hooks: hookEntry)
-        ]
+        let hookConfig = claudeHookConfig(for: context)
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
-        let hookEvents: [(String, [[String: Any]])] = [
-            ("UserPromptSubmit", withoutMatcher),
-            ("PreToolUse", withMatcher),
-            ("PostToolUse", withMatcher),
-            ("PermissionRequest", withMatcherAndTimeout),
-            ("Notification", withMatcher),
-            ("Stop", withoutMatcher),
-            ("SubagentStop", withoutMatcher),
-            ("SessionStart", withoutMatcher),
-            ("SessionEnd", withoutMatcher),
-            ("PreCompact", preCompactConfig)
-        ]
-
-        for (event, config) in hookEvents {
+        for (event, config) in hookConfig {
             if var existingEvent = hooks[event] as? [[String: Any]] {
                 existingEvent.removeAll { entry in
                     guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
@@ -629,6 +693,22 @@ private struct ClaudeHookPlugin: AgentHookPlugin {
         }
 
         json["hooks"] = hooks
+        try context.writeJSON(json, to: settings)
+    }
+
+    func repair(in context: HookPluginContext) throws {
+        let claudeDir = context.homeDirectory.appendingPathComponent(".claude")
+        let hooksDir = claudeDir.appendingPathComponent("hooks")
+        let settings = claudeDir.appendingPathComponent("settings.json")
+
+        try context.fileManager.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+        try context.ensureSharedBridgeInstalled()
+        context.removeLegacyBridgeArtifacts()
+        try? context.backupFileIfNeeded(at: settings)
+        try? context.fileManager.removeItem(at: hooksDir.appendingPathComponent("agent-island-state.py"))
+
+        var json = context.readJSON(at: settings)
+        json["hooks"] = claudeHookConfig(for: context)
         try context.writeJSON(json, to: settings)
     }
 
@@ -707,11 +787,11 @@ private struct CodexHookPlugin: AgentHookPlugin {
     let agentType: AgentPlatform = .codex
     let capabilities = AgentHookCapabilities(
         supportedEvents: [
-            "SessionStart",
-            "PreToolUse",
-            "PostToolUse",
-            "UserPromptSubmit",
-            "Stop"
+            HookEventKey.sessionStart,
+            HookEventKey.preToolUse,
+            HookEventKey.postToolUse,
+            HookEventKey.userPromptSubmit,
+            HookEventKey.stop
         ],
         approvalTools: [],
         approvalCommandPatterns: [
@@ -733,6 +813,27 @@ private struct CodexHookPlugin: AgentHookPlugin {
             || context.binaryExists("codex")
     }
 
+    private func codexHookConfig(for context: HookPluginContext) -> [String: Any] {
+        let standardHookCommand = context.commandHook(
+            command: context.bridgeCommand(for: .codex),
+            timeout: 5
+        )
+        let permissionHookCommand = context.commandHook(
+            command: context.bridgeCommand(for: .codex),
+            timeout: 300
+        )
+
+        return [
+            "hooks": [
+                HookEventKey.sessionStart: [context.hookGroup(matcher: "startup|resume", hooks: [standardHookCommand])],
+                HookEventKey.preToolUse: [context.hookGroup(matcher: "Bash", hooks: [permissionHookCommand])],
+                HookEventKey.postToolUse: [context.hookGroup(matcher: "Bash", hooks: [standardHookCommand])],
+                HookEventKey.userPromptSubmit: [context.hookGroup(hooks: [standardHookCommand])],
+                HookEventKey.stop: [context.hookGroup(hooks: [standardHookCommand])]
+            ]
+        ]
+    }
+
     func install(in context: HookPluginContext) throws {
         let codexDir = context.homeDirectory.appendingPathComponent(".codex")
         let hooksFile = codexDir.appendingPathComponent("hooks.json")
@@ -743,27 +844,22 @@ private struct CodexHookPlugin: AgentHookPlugin {
         context.removeLegacyBridgeArtifacts()
         try enableCodexHooksFeature(configURL: configFile, context: context)
         try context.writeDerivedBridgeProfile(for: self)
+        try context.writeJSON(codexHookConfig(for: context), to: hooksFile)
+    }
 
-        let standardHookCommand = context.commandHook(
-            command: context.bridgeCommand(for: .codex),
-            timeout: 5
-        )
-        let permissionHookCommand = context.commandHook(
-            command: context.bridgeCommand(for: .codex),
-            timeout: 300
-        )
+    func repair(in context: HookPluginContext) throws {
+        let codexDir = context.homeDirectory.appendingPathComponent(".codex")
+        let hooksFile = codexDir.appendingPathComponent("hooks.json")
+        let configFile = codexDir.appendingPathComponent("config.toml")
 
-        let hooks: [String: Any] = [
-            "hooks": [
-                "SessionStart": [context.hookGroup(matcher: "startup|resume", hooks: [standardHookCommand])],
-                "PreToolUse": [context.hookGroup(matcher: "Bash", hooks: [permissionHookCommand])],
-                "PostToolUse": [context.hookGroup(matcher: "Bash", hooks: [standardHookCommand])],
-                "UserPromptSubmit": [context.hookGroup(hooks: [standardHookCommand])],
-                "Stop": [context.hookGroup(hooks: [standardHookCommand])]
-            ]
-        ]
-
-        try context.writeJSON(hooks, to: hooksFile)
+        try context.fileManager.createDirectory(at: codexDir, withIntermediateDirectories: true)
+        try context.ensureSharedBridgeInstalled()
+        context.removeLegacyBridgeArtifacts()
+        try context.backupFileIfNeeded(at: hooksFile)
+        try context.backupFileIfNeeded(at: configFile)
+        try enableCodexHooksFeature(configURL: configFile, context: context)
+        try context.writeDerivedBridgeProfile(for: self)
+        try context.writeJSON(codexHookConfig(for: context), to: hooksFile)
     }
 
     func uninstall(in context: HookPluginContext) throws {
@@ -840,11 +936,11 @@ private struct GeminiHookPlugin: AgentHookPlugin {
     let agentType: AgentPlatform = .gemini
     let capabilities = AgentHookCapabilities(
         supportedEvents: [
-            "BeforeTool",
-            "AfterTool",
-            "SessionStart",
-            "SessionEnd",
-            "Notification"
+            HookEventKey.beforeTool,
+            HookEventKey.afterTool,
+            HookEventKey.sessionStart,
+            HookEventKey.sessionEnd,
+            HookEventKey.notification
         ],
         approvalTools: [
             "run_shell_command",
@@ -855,7 +951,7 @@ private struct GeminiHookPlugin: AgentHookPlugin {
         ],
         approvalCommandPatterns: [],
         responseMode: "gemini",
-        permissionRequestSource: .preToolUse,
+        permissionRequestSource: .beforeTool,
         supportsPermissionDecisions: true,
         supportsConversationHistory: false
     )
@@ -863,6 +959,22 @@ private struct GeminiHookPlugin: AgentHookPlugin {
     func isAvailable(in context: HookPluginContext) -> Bool {
         context.fileManager.fileExists(atPath: context.homeDirectory.appendingPathComponent(".gemini").path)
             || context.binaryExists("gemini")
+    }
+
+    private func geminiHookConfig(for context: HookPluginContext) -> [String: Any] {
+        let hook = context.commandHook(
+            command: context.bridgeCommand(for: .gemini),
+            name: "agent-island-gemini-bridge",
+            timeout: 5000
+        )
+
+        return [
+            HookEventKey.beforeTool: [context.hookGroup(matcher: "", hooks: [hook])],
+            HookEventKey.afterTool: [context.hookGroup(matcher: "", hooks: [hook])],
+            HookEventKey.sessionStart: [context.hookGroup(hooks: [hook])],
+            HookEventKey.sessionEnd: [context.hookGroup(hooks: [hook])],
+            HookEventKey.notification: [context.hookGroup(hooks: [hook])]
+        ]
     }
 
     func install(in context: HookPluginContext) throws {
@@ -875,25 +987,33 @@ private struct GeminiHookPlugin: AgentHookPlugin {
         try context.writeDerivedBridgeProfile(for: self)
 
         var json = context.readJSON(at: settings)
-        let hook = context.commandHook(
-            command: context.bridgeCommand(for: .gemini),
-            name: "agent-island-gemini-bridge",
-            timeout: 5000
-        )
-
-        let installedHooks: [String: Any] = [
-            "BeforeTool": [context.hookGroup(matcher: "", hooks: [hook])],
-            "AfterTool": [context.hookGroup(matcher: "", hooks: [hook])],
-            "SessionStart": [context.hookGroup(hooks: [hook])],
-            "SessionEnd": [context.hookGroup(hooks: [hook])],
-            "Notification": [context.hookGroup(hooks: [hook])]
-        ]
+        let installedHooks = geminiHookConfig(for: context)
         json["hooks"] = installedHooks
         json["hooksConfig"] = [
             "enabled": true,
             "hooks": installedHooks
         ]
 
+        try context.writeJSON(json, to: settings)
+    }
+
+    func repair(in context: HookPluginContext) throws {
+        let geminiDir = context.homeDirectory.appendingPathComponent(".gemini")
+        let settings = geminiDir.appendingPathComponent("settings.json")
+
+        try context.fileManager.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+        try context.ensureSharedBridgeInstalled()
+        context.removeLegacyBridgeArtifacts()
+        try context.backupFileIfNeeded(at: settings)
+        try context.writeDerivedBridgeProfile(for: self)
+
+        let installedHooks = geminiHookConfig(for: context)
+        var json = context.readJSON(at: settings)
+        json["hooks"] = installedHooks
+        json["hooksConfig"] = [
+            "enabled": true,
+            "hooks": installedHooks
+        ]
         try context.writeJSON(json, to: settings)
     }
 

@@ -52,16 +52,23 @@ fn run() -> Result<()> {
         return Ok(());
     };
     let hook_event = dispatch_result.hook_event.unwrap_or_default();
-    let status = dispatch_result.status.unwrap_or_else(|| "processing".to_string());
+    let status = dispatch_result
+        .status
+        .unwrap_or_else(|| adapter::HOOK_STATUS_PROCESSING.to_string());
 
-    if status == "waiting_for_approval" {
+    if status == adapter::HOOK_STATUS_WAITING_FOR_APPROVAL {
         let decision = socket_client::send_sync(&cli.socket, &payload)?;
-        if let Some(response) = adapter.permission_response(
+        if let Some(response) = adapter.map_permission_response(
             decision.decision.as_deref(),
             decision.reason.as_deref(),
             &hook_event,
         ) {
-            println!("{}", serde_json::to_string(&response)?);
+            let response_text = serde_json::to_string(&response.body)?;
+            println!("{}", response_text);
+
+            if std::env::var("RUST_LOG_PERMISSION_RESPONSE").is_ok() {
+                eprintln!("permission_response_json={}", response_text);
+            }
         }
     } else {
         socket_client::send_async(&cli.socket, &payload)?;
@@ -101,4 +108,92 @@ fn load_profile(path: Option<PathBuf>, source: AgentSource) -> Result<BridgeProf
         .with_context(|| format!("failed to read profile from {}", path.display()))?;
     let value: Value = serde_json::from_str(&contents)?;
     Ok(BridgeProfile::from_json(&value))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::adapter::adapter_for;
+    use crate::protocol::AgentSource;
+
+    #[test]
+    fn claude_permission_allow_response_matches_official_shape() {
+        let adapter = adapter_for(AgentSource::Claude);
+        let response = adapter
+            .map_permission_response(Some("allow"), None, "PermissionRequest")
+            .expect("expected response");
+        let body = response.body;
+
+        assert_eq!(
+            body["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some("PermissionRequest")
+        );
+        assert_eq!(
+            body["hookSpecificOutput"]["decision"]["behavior"].as_str(),
+            Some("allow")
+        );
+    }
+
+    #[test]
+    fn claude_permission_deny_response_matches_official_shape() {
+        let adapter = adapter_for(AgentSource::Claude);
+        let response = adapter
+            .map_permission_response(Some("deny"), Some("Nope"), "PermissionRequest")
+            .expect("expected response");
+        let body = response.body;
+
+        assert_eq!(
+            body["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some("PermissionRequest")
+        );
+        assert_eq!(
+            body["hookSpecificOutput"]["decision"]["behavior"].as_str(),
+            Some("deny")
+        );
+        assert_eq!(
+            body["hookSpecificOutput"]["decision"]["message"].as_str(),
+            Some("Nope")
+        );
+    }
+
+    #[test]
+    fn codex_permission_response_matches_official_shape() {
+        let adapter = adapter_for(AgentSource::Codex);
+        let response = adapter
+            .map_permission_response(Some("allow"), Some("Approved"), "PreToolUse")
+            .expect("expected response");
+        let body = response.body;
+
+        assert_eq!(body["decision"].as_str(), Some("allow"));
+        assert_eq!(
+            body["hookSpecificOutput"]["hookEventName"].as_str(),
+            Some("PreToolUse")
+        );
+        assert_eq!(
+            body["hookSpecificOutput"]["permissionDecision"].as_str(),
+            Some("allow")
+        );
+        assert_eq!(
+            body["hookSpecificOutput"]["permissionDecisionReason"].as_str(),
+            Some("Approved")
+        );
+    }
+
+    #[test]
+    fn gemini_deny_response_matches_official_shape() {
+        let adapter = adapter_for(AgentSource::Gemini);
+        let response = adapter
+            .map_permission_response(Some("deny"), Some("Denied"), "BeforeTool")
+            .expect("expected response");
+        let body = response.body;
+
+        assert_eq!(body["decision"].as_str(), Some("deny"));
+        assert_eq!(body["reason"].as_str(), Some("Denied"));
+    }
+
+    #[test]
+    fn gemini_allow_has_no_response_body() {
+        let adapter = adapter_for(AgentSource::Gemini);
+        let response = adapter.map_permission_response(Some("allow"), None, "BeforeTool");
+        assert!(response.is_none());
+    }
 }

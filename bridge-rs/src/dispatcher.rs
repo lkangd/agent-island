@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::adapter::{adapter_for, build_payload};
+use crate::adapter::adapter_for;
 use crate::protocol::{AgentSource, BridgeProfile};
 
 pub struct DispatchResult {
@@ -9,63 +9,142 @@ pub struct DispatchResult {
     pub status: Option<String>,
 }
 
-pub fn dispatch(
-    source: AgentSource,
-    input: &Value,
-    profile: &BridgeProfile,
-) -> DispatchResult {
+pub fn dispatch(source: AgentSource, input: &Value, profile: &BridgeProfile) -> DispatchResult {
     let adapter = adapter_for(source);
-    let normalized = adapter.normalize_input(input);
-
-    if !adapter.should_emit_event(&normalized) {
+    let Some(runtime_event) = adapter.map_event(profile, input) else {
         return DispatchResult {
             payload: None,
             hook_event: None,
             status: None,
         };
-    }
+    };
 
-    let status = adapter.resolve_status(profile, &normalized);
-
-    let session_id = non_empty_or(
-        normalized.session_id.clone(),
-        || format!("unknown-{}", std::process::id()),
-    );
-    let cwd = non_empty_or(
-        normalized.cwd.clone(),
-        || std::env::current_dir().ok().map(|path| path.display().to_string()).unwrap_or_default(),
-    );
+    let hook_event = runtime_event.hook_event().to_string();
+    let status = runtime_event.status.clone();
     let process_info = adapter.process_info(input);
-
-    let payload = build_payload(
-        source,
-        session_id,
-        cwd,
-        normalized.hook_event.clone(),
-        status.clone(),
-        normalized.transcript_path.clone(),
-        process_info.pid,
-        process_info.tty,
-        normalized.tool_name.clone(),
-        normalized.tool_input.clone(),
-        normalized.tool_use_id.clone(),
-        normalized.notification_type.clone(),
-        normalized.message.clone(),
-    );
+    let payload = runtime_event.into_payload(source, process_info);
 
     DispatchResult {
         payload: Some(payload),
-        hook_event: Some(normalized.hook_event),
+        hook_event: Some(hook_event),
         status: Some(status),
     }
 }
 
-fn non_empty_or<F>(value: Option<String>, fallback: F) -> String
-where
-    F: FnOnce() -> String,
-{
-    match value {
-        Some(value) if !value.is_empty() => value,
-        _ => fallback(),
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::dispatch;
+    use crate::adapter::{
+        HOOK_STATUS_WAITING_FOR_APPROVAL, INTERNAL_EVENT_IDLE_PROMPT,
+        INTERNAL_EVENT_PERMISSION_REQUESTED,
+    };
+    use crate::protocol::{AgentSource, BridgeProfile};
+
+    fn empty_profile() -> BridgeProfile {
+        BridgeProfile {
+            response_mode: None,
+            approval_tools: vec![],
+            approval_command_patterns: vec![],
+        }
+    }
+
+    #[test]
+    fn claude_permission_request_maps_to_internal_permission_event() {
+        let input = json!({
+            "session_id": "claude-session",
+            "cwd": "/tmp/project",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "ls -la"
+            },
+            "tool_use_id": "toolu_claude_123"
+        });
+
+        let result = dispatch(AgentSource::Claude, &input, &empty_profile());
+        let payload = result.payload.expect("expected payload");
+
+        assert_eq!(payload.event, "PermissionRequest");
+        assert_eq!(payload.internal_event, INTERNAL_EVENT_PERMISSION_REQUESTED);
+        assert_eq!(payload.status, HOOK_STATUS_WAITING_FOR_APPROVAL);
+        assert_eq!(payload.permission_mode.as_deref(), Some("native_app"));
+        assert_eq!(
+            payload.extra.get("officialPermissionEvent").and_then(|v| v.as_str()),
+            Some("PermissionRequest")
+        );
+    }
+
+    #[test]
+    fn codex_pre_tool_use_maps_to_internal_permission_event() {
+        let input = json!({
+            "session_id": "codex-session",
+            "cwd": "/tmp/project",
+            "method": "PreToolUse",
+            "params": {
+                "name": "Bash",
+                "command": "rm -rf /tmp/demo",
+                "callId": "codex-call-123"
+            }
+        });
+
+        let result = dispatch(AgentSource::Codex, &input, &empty_profile());
+        let payload = result.payload.expect("expected payload");
+
+        assert_eq!(payload.event, "PreToolUse");
+        assert_eq!(payload.internal_event, INTERNAL_EVENT_PERMISSION_REQUESTED);
+        assert_eq!(payload.status, HOOK_STATUS_WAITING_FOR_APPROVAL);
+        assert_eq!(payload.permission_mode.as_deref(), Some("native_app"));
+        assert_eq!(
+            payload.extra.get("officialPermissionEvent").and_then(|v| v.as_str()),
+            Some("PreToolUse")
+        );
+        assert_eq!(
+            payload.extra.get("toolMatcher").and_then(|v| v.as_str()),
+            Some("Bash")
+        );
+    }
+
+    #[test]
+    fn gemini_before_tool_maps_to_internal_permission_event() {
+        let input = json!({
+            "session_id": "gemini-session",
+            "cwd": "/tmp/project",
+            "event": "BeforeTool",
+            "tool_name": "write_file",
+            "tool_input": {
+                "path": "/tmp/demo.txt"
+            },
+            "tool_use_id": "gemini-call-123"
+        });
+
+        let result = dispatch(AgentSource::Gemini, &input, &empty_profile());
+        let payload = result.payload.expect("expected payload");
+
+        assert_eq!(payload.event, "BeforeTool");
+        assert_eq!(payload.internal_event, INTERNAL_EVENT_PERMISSION_REQUESTED);
+        assert_eq!(payload.status, HOOK_STATUS_WAITING_FOR_APPROVAL);
+        assert_eq!(payload.permission_mode.as_deref(), Some("native_app"));
+        assert_eq!(
+            payload.extra.get("officialPermissionEvent").and_then(|v| v.as_str()),
+            Some("BeforeTool")
+        );
+    }
+
+    #[test]
+    fn idle_notification_maps_to_internal_idle_prompt() {
+        let input = json!({
+            "session_id": "claude-session",
+            "cwd": "/tmp/project",
+            "hook_event_name": "Notification",
+            "notification_type": "idle_prompt"
+        });
+
+        let result = dispatch(AgentSource::Claude, &input, &empty_profile());
+        let payload = result.payload.expect("expected payload");
+
+        assert_eq!(payload.internal_event, INTERNAL_EVENT_IDLE_PROMPT);
+        assert_eq!(payload.permission_mode, None);
     }
 }

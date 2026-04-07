@@ -50,7 +50,7 @@ actor ApprovalPolicyExecutor {
     ) async -> ApprovalExecutionResult {
         switch policy {
         case .deny:
-            HookSocketServer.shared.respondToPermission(
+            await HookSocketServer.shared.respondToPermission(
                 toolUseId: permission.toolUseId,
                 decision: "deny",
                 reason: nil
@@ -73,7 +73,7 @@ actor ApprovalPolicyExecutor {
     }
 
     func applyAutomaticPolicyIfNeeded(for event: HookEvent) async -> ApprovalExecutionResult {
-        guard event.expectsResponse,
+        guard event.shouldAwaitPermissionResponse,
               event.agentType.approvalCapability.kind == .nativeInteractive,
               let policy = await ApprovalPolicyStore.shared.matchingPolicy(for: event),
               policy == .allowAlways || policy == .autoExecute else {
@@ -84,7 +84,7 @@ actor ApprovalPolicyExecutor {
     }
 
     private func approve(sessionId: String, permission: PermissionContext) async -> ApprovalExecutionResult {
-        HookSocketServer.shared.respondToPermission(
+        await HookSocketServer.shared.respondToPermission(
             toolUseId: permission.toolUseId,
             decision: "allow"
         )

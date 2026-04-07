@@ -285,7 +285,10 @@ struct ChatView: View {
                                 removal: .opacity
                             ))
                     } else if isProcessing {
-                        ProcessingIndicatorView(turnId: lastUserMessageId)
+                        ProcessingIndicatorView(
+                            turnId: lastUserMessageId,
+                            color: session.agentType.accentColor
+                        )
                             .padding(.horizontal, 16)
                             .scaleEffect(x: 1, y: -1)
                             .transition(.asymmetric(
@@ -583,17 +586,18 @@ struct AssistantMessageView: View {
 
 struct ProcessingIndicatorView: View {
     private let baseTexts = ["Processing", "Working"]
-    private let color = Color(red: 0.85, green: 0.47, blue: 0.34) // Claude orange
+    private let color: Color
     private let baseText: String
 
     @State private var dotCount: Int = 1
     private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     /// Use a turnId to select text consistently per user turn
-    init(turnId: String = "") {
+    init(turnId: String = "", color: Color = TerminalColors.claude) {
         // Use hash of turnId to pick base text consistently for this turn
         let index = abs(turnId.hashValue) % baseTexts.count
         baseText = baseTexts[index]
+        self.color = color
     }
 
     private var dots: String {
@@ -602,7 +606,7 @@ struct ProcessingIndicatorView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            ProcessingSpinner()
+            ProcessingSpinner(color: color)
                 .frame(width: 6)
 
             Text(baseText + dots)
@@ -634,7 +638,7 @@ struct TerminalApprovalIndicatorView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            ProcessingSpinner()
+            ProcessingSpinner(color: TerminalColors.amber)
                 .frame(width: 6)
 
             Text(baseText + dots)

@@ -15,7 +15,7 @@ class AgentSessionMonitor: ObservableObject {
     @Published var instances: [SessionListState] = []
     @Published var pendingInstances: [SessionListState] = []
 
-    private let dispatcher: any CapabilityDispatcher = DefaultCapabilityDispatcher.shared
+    private let dispatcher = DefaultCapabilityDispatcher.shared
     private var cancellables = Set<AnyCancellable>()
 
     init() {

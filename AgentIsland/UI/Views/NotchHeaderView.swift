@@ -11,84 +11,111 @@ import SwiftUI
 struct IslandMarkIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
     var animateLegs: Bool = false
 
     @State private var legPhase: Int = 0
 
     // Timer for leg animation
-    private let legTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
+    private let legTimer = Timer.publish(every: 0.12, on: .main, in: .common).autoconnect()
 
-    init(size: CGFloat = 16, color: Color = Color(red: 0.85, green: 0.47, blue: 0.34), animateLegs: Bool = false) {
+    init(size: CGFloat = 18, color: Color? = nil, agentType: AgentPlatform = .claude, animateLegs: Bool = false) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor
+        self.agentType = agentType
         self.animateLegs = animateLegs
     }
 
     var body: some View {
         Canvas { context, canvasSize in
-            let scale = size / 52.0  // Original viewBox height is 52
-            let xOffset = (canvasSize.width - 66 * scale) / 2
+            let iconViewport: CGFloat = 30
+            let scale = size / iconViewport
+            let xOffset = (canvasSize.width - iconViewport * scale) / 2
+            let transform = CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0)
 
-            // Left antenna
-            let leftAntenna = Path { p in
-                p.addRect(CGRect(x: 0, y: 13, width: 6, height: 13))
-            }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-            context.fill(leftAntenna, with: .color(color))
-
-            // Right antenna
-            let rightAntenna = Path { p in
-                p.addRect(CGRect(x: 60, y: 13, width: 6, height: 13))
-            }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-            context.fill(rightAntenna, with: .color(color))
-
-            // Animated legs - alternating up/down pattern for walking effect
-            // Legs stay attached to body (y=39), only height changes
-            let baseLegPositions: [CGFloat] = [6, 18, 42, 54]
-            let baseLegHeight: CGFloat = 13
-
-            // Height offsets: positive = longer leg (down), negative = shorter leg (up)
-            let legHeightOffsets: [[CGFloat]] = [
-                [3, -3, 3, -3],   // Phase 0: alternating
-                [0, 0, 0, 0],     // Phase 1: neutral
-                [-3, 3, -3, 3],   // Phase 2: alternating (opposite)
-                [0, 0, 0, 0],     // Phase 3: neutral
+            let bodyRect = CGRect(x: 4, y: 8, width: 22, height: 20)
+            let chestRect = CGRect(x: 10, y: 12, width: 10, height: 8)
+            let faceRect = CGRect(x: 10, y: 14, width: 10, height: 7)
+            let leftEye = CGRect(x: 12, y: 16, width: 2, height: 2)
+            let rightEye = CGRect(x: 18, y: 16, width: 2, height: 2)
+            let leftAntenna = CGRect(x: 5, y: 3, width: 2, height: 6)
+            let rightAntenna = CGRect(x: 18, y: 3, width: 2, height: 6)
+            let leftDot = CGRect(x: 5, y: 2, width: 2, height: 2)
+            let rightDot = CGRect(x: 18, y: 2, width: 2, height: 2)
+            let bootRects: [CGRect] = [
+                CGRect(x: 7, y: 28, width: 2, height: 2),
+                CGRect(x: 11, y: 28, width: 2, height: 2),
+                CGRect(x: 16, y: 28, width: 2, height: 2),
+                CGRect(x: 20, y: 28, width: 2, height: 2),
+            ]
+            let armRects: [CGRect] = [
+                CGRect(x: 0, y: 14, width: 4, height: 2),
+                CGRect(x: 26, y: 14, width: 4, height: 2),
+                CGRect(x: 0, y: 19, width: 4, height: 2),
+                CGRect(x: 26, y: 19, width: 4, height: 2),
             ]
 
-            let currentHeightOffsets = animateLegs ? legHeightOffsets[legPhase % 4] : [CGFloat](repeating: 0, count: 4)
+            let walkCycle: [[CGFloat]] = [
+                [-2, -1.5, 2, 1.5],
+                [0, 0, 0, 0],
+                [2, 1.5, -2, -1.5],
+                [0, 0, 0, 0],
+            ]
+            let currentOffset = animateLegs ? walkCycle[legPhase % walkCycle.count] : [CGFloat](repeating: 0, count: 4)
+            let bodyLift: CGFloat = animateLegs ? (legPhase % 2 == 0 ? -1 : 0) : 0
 
-            for (index, xPos) in baseLegPositions.enumerated() {
-                let heightOffset = currentHeightOffsets[index]
-                let legHeight = baseLegHeight + heightOffset
-                let leg = Path { p in
-                    p.addRect(CGRect(x: xPos, y: 39, width: 6, height: legHeight))
-                }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-                context.fill(leg, with: .color(color))
+            // Base body
+            var body = bodyRect
+            body.origin.y += bodyLift
+            context.fill(Path(body).applying(transform), with: .color(color))
+            context.fill(Path(chestRect).applying(transform), with: .color(.black.opacity(0.22)))
+            context.fill(Path(faceRect).applying(transform), with: .color(color.opacity(0.15)))
+
+            // Face and eyes
+            context.fill(Path(ellipseIn: CGRect(x: 6, y: 14, width: 6, height: 3).applying(transform)), with: .color(.black.opacity(0.24)))
+            context.fill(Path(leftEye).applying(transform), with: .color(.black))
+            context.fill(Path(rightEye).applying(transform), with: .color(.black))
+
+            // Antennae + tips
+            context.fill(Path(roundedRect: leftAntenna, cornerSize: CGSize(width: 0.5, height: 0.5)).applying(transform), with: .color(color))
+            context.fill(Path(roundedRect: rightAntenna, cornerSize: CGSize(width: 0.5, height: 0.5)).applying(transform), with: .color(color))
+            context.fill(Path(ellipseIn: leftDot).applying(transform), with: .color(activeColor(isAlert: hasAlertState())))
+            context.fill(Path(ellipseIn: rightDot).applying(transform), with: .color(activeColor(isAlert: hasAlertState())))
+
+            // Arms
+            for (i, arm) in armRects.enumerated() {
+                var movingArm = arm
+                if animateLegs {
+                    movingArm.origin.y += (i % 2 == 0 ? 1 : -1) * (legPhase % 2 == 0 ? 0.8 : 0)
+                }
+                context.fill(
+                    Path(roundedRect: movingArm, cornerSize: CGSize(width: 0.8, height: 0.8)).applying(transform),
+                    with: .color(color.opacity(0.85))
+                )
             }
 
-            // Main body
-            let body = Path { p in
-                p.addRect(CGRect(x: 6, y: 0, width: 54, height: 39))
-            }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-            context.fill(body, with: .color(color))
-
-            // Left eye
-            let leftEye = Path { p in
-                p.addRect(CGRect(x: 12, y: 13, width: 6, height: 6.5))
-            }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-            context.fill(leftEye, with: .color(.black))
-
-            // Right eye
-            let rightEye = Path { p in
-                p.addRect(CGRect(x: 48, y: 13, width: 6, height: 6.5))
-            }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
-            context.fill(rightEye, with: .color(.black))
+            // Feet / stance animated by processing flag
+            for (i, boot) in bootRects.enumerated() {
+                let offsetY = currentOffset[min(i, 3)] * 2.0
+                var movingBoot = boot
+                movingBoot.origin.y += offsetY
+                context.fill(Path(roundedRect: movingBoot, cornerSize: CGSize(width: 0.6, height: 0.6)).applying(transform), with: .color(color.opacity(0.65)))
+            }
         }
-        .frame(width: size * (66.0 / 52.0), height: size)
+        .frame(width: size, height: size)
         .onReceive(legTimer) { _ in
             if animateLegs {
                 legPhase = (legPhase + 1) % 4
             }
         }
+    }
+
+    private func hasAlertState() -> Bool {
+        animateLegs || legPhase != 0
+    }
+
+    private func activeColor(isAlert: Bool) -> Color {
+        isAlert ? .red : .yellow
     }
 }
 
@@ -96,10 +123,12 @@ struct IslandMarkIcon: View {
 struct PermissionIndicatorIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
 
-    init(size: CGFloat = 14, color: Color = Color(red: 0.11, green: 0.12, blue: 0.13)) {
+    init(size: CGFloat = 14, color: Color? = nil, agentType: AgentPlatform = .claude) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor
+        self.agentType = agentType
     }
 
     // Visible pixel positions from the SVG (at 30x30 scale)
@@ -134,10 +163,12 @@ struct PermissionIndicatorIcon: View {
 struct ReadyForInputIndicatorIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
 
-    init(size: CGFloat = 14, color: Color = TerminalColors.green) {
+    init(size: CGFloat = 14, color: Color? = nil, agentType: AgentPlatform = .claude) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor
+        self.agentType = agentType
     }
 
     // Checkmark shape pixel positions (at 30x30 scale)

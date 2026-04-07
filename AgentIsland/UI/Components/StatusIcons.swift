@@ -11,10 +11,12 @@ import SwiftUI
 struct WaitingForInputIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
 
-    init(size: CGFloat = 12, color: Color = TerminalColors.green) {
+    init(size: CGFloat = 12, agentType: AgentPlatform = .claude, color: Color? = nil) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor
+        self.agentType = agentType
     }
 
     var body: some View {
@@ -74,10 +76,12 @@ struct WaitingForInputIcon: View {
 struct WaitingForApprovalIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
 
-    init(size: CGFloat = 12, color: Color = TerminalColors.amber) {
+    init(size: CGFloat = 12, agentType: AgentPlatform = .claude, color: Color? = nil) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor.opacity(0.8)
+        self.agentType = agentType
     }
 
     var body: some View {
@@ -115,11 +119,13 @@ struct WaitingForApprovalIcon: View {
 struct RunningIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
     @State private var rotation: Double = 0
 
-    init(size: CGFloat = 12, color: Color = TerminalColors.cyan) {
+    init(size: CGFloat = 12, agentType: AgentPlatform = .claude, color: Color? = nil) {
         self.size = size
-        self.color = color
+        self.color = color ?? agentType.accentColor.opacity(0.9)
+        self.agentType = agentType
     }
 
     var body: some View {
@@ -185,10 +191,12 @@ struct RunningIcon: View {
 struct IdleIcon: View {
     let size: CGFloat
     let color: Color
+    let agentType: AgentPlatform
 
-    init(size: CGFloat = 12, color: Color = TerminalColors.dim) {
+    init(size: CGFloat = 12, agentType: AgentPlatform = .claude, color: Color? = nil) {
         self.size = size
-        self.color = color
+        self.color = color ?? TerminalColors.dim
+        self.agentType = agentType
     }
 
     var body: some View {
@@ -219,22 +227,24 @@ struct IdleIcon: View {
 struct StatusIcon: View {
     let phase: SessionPhase
     let size: CGFloat
+    let agentType: AgentPlatform
 
-    init(phase: SessionPhase, size: CGFloat = 12) {
+    init(phase: SessionPhase, size: CGFloat = 12, agentType: AgentPlatform = .claude) {
         self.phase = phase
         self.size = size
+        self.agentType = agentType
     }
 
     var body: some View {
         switch phase {
         case .waitingForInput:
-            WaitingForInputIcon(size: size)
+            WaitingForInputIcon(size: size, agentType: agentType)
         case .waitingForApproval:
-            WaitingForApprovalIcon(size: size)
+            WaitingForApprovalIcon(size: size, agentType: agentType)
         case .processing, .compacting:
-            RunningIcon(size: size)
+            RunningIcon(size: size, agentType: agentType)
         case .idle, .ended:
-            IdleIcon(size: size)
+            IdleIcon(size: size, agentType: agentType)
         }
     }
 }

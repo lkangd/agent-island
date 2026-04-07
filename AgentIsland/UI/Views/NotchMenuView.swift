@@ -169,7 +169,7 @@ struct NotchMenuView: View {
     private func repairPlugin(_ summary: AgentHookPluginSummary) {
         guard summary.isAvailable else { return }
 
-        if let err = AgentHookPluginManager.shared.install(agentType: summary.agentType) {
+        if let err = AgentHookPluginManager.shared.repair(agentType: summary.agentType) {
             showHookAction("Repair failed for \(summary.agentType.displayName): \(err.localizedDescription)", isError: true)
         } else {
             showHookAction("Repaired \(summary.agentType.displayName)")

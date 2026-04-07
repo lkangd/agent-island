@@ -119,59 +119,71 @@ actor ConversationParser {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         for line in lines {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+            guard
+                let lineData = line.data(using: .utf8),
+                let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+            else {
                 continue
             }
 
             let type = json["type"] as? String
             let isMeta = json["isMeta"] as? Bool ?? false
 
-            if type == "user" && !isMeta {
-                if let message = json["message"] as? [String: Any],
-                   let msgContent = message["content"] as? String {
-                    if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                        firstUserMessage = Self.truncateMessage(msgContent, maxLength: 50)
-                        break
-                    }
-                }
+            if type == "user" && !isMeta,
+               let message = json["message"] as? [String: Any],
+               let msgContent = message["content"] as? String,
+               let cleanedMsgContent = Self.stripConversationMetadata(from: msgContent),
+               !cleanedMsgContent.hasPrefix("<command-name>"),
+               !cleanedMsgContent.hasPrefix("<local-command"),
+               !cleanedMsgContent.hasPrefix("Caveat:") {
+                firstUserMessage = Self.truncateMessage(cleanedMsgContent, maxLength: 50)
+                break
             }
         }
 
         var foundLastUserMessage = false
         for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+            guard
+                let lineData = line.data(using: .utf8),
+                let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+            else {
                 continue
             }
 
-            let type = json["type"] as? String
+            guard let type = json["type"] as? String else {
+                continue
+            }
 
-            if lastMessage == nil {
-                if type == "user" || type == "assistant" {
-                    let isMeta = json["isMeta"] as? Bool ?? false
-                    if !isMeta, let message = json["message"] as? [String: Any] {
-                        if let msgContent = message["content"] as? String {
-                            if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                                lastMessage = msgContent
-                                lastMessageRole = type
-                            }
-                        } else if let contentArray = message["content"] as? [[String: Any]] {
-                            for block in contentArray.reversed() {
-                                let blockType = block["type"] as? String
-                                if blockType == "tool_use" {
-                                    let toolName = block["name"] as? String ?? "Tool"
-                                    let toolInput = Self.formatToolInput(block["input"] as? [String: Any], toolName: toolName)
-                                    lastMessage = toolInput
-                                    lastMessageRole = "tool"
-                                    lastToolName = toolName
+            if lastMessage == nil, type == "user" || type == "assistant" {
+                let isMeta = json["isMeta"] as? Bool ?? false
+                if !isMeta, let message = json["message"] as? [String: Any] {
+                    if let msgContent = message["content"] as? String {
+                        if let cleanedMsgContent = Self.stripConversationMetadata(from: msgContent),
+                           !cleanedMsgContent.hasPrefix("<command-name>"),
+                           !cleanedMsgContent.hasPrefix("<local-command"),
+                           !cleanedMsgContent.hasPrefix("Caveat:") {
+                            lastMessage = cleanedMsgContent
+                            lastMessageRole = type
+                        }
+                    } else if let contentArray = message["content"] as? [[String: Any]] {
+                        for block in contentArray.reversed() {
+                            let blockType = block["type"] as? String
+                            if blockType == "tool_use" {
+                                let toolName = block["name"] as? String ?? "Tool"
+                                let toolInput = Self.formatToolInput(
+                                    block["input"] as? [String: Any],
+                                    toolName: toolName
+                                )
+                                lastMessage = toolInput
+                                lastMessageRole = "tool"
+                                lastToolName = toolName
+                                break
+                            } else if blockType == "text", let text = block["text"] as? String {
+                                if let cleanedText = Self.stripConversationMetadata(from: text),
+                                   !cleanedText.hasPrefix("[Request interrupted by user") {
+                                    lastMessage = cleanedText
+                                    lastMessageRole = type
                                     break
-                                } else if blockType == "text", let text = block["text"] as? String {
-                                    if !text.hasPrefix("[Request interrupted by user") {
-                                        lastMessage = text
-                                        lastMessageRole = type
-                                        break
-                                    }
                                 }
                             }
                         }
@@ -179,17 +191,19 @@ actor ConversationParser {
                 }
             }
 
-            if !foundLastUserMessage && type == "user" {
+            if !foundLastUserMessage, type == "user" {
                 let isMeta = json["isMeta"] as? Bool ?? false
-                if !isMeta, let message = json["message"] as? [String: Any] {
-                    if let msgContent = message["content"] as? String {
-                        if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                            if let timestampStr = json["timestamp"] as? String {
-                                lastUserMessageDate = formatter.date(from: timestampStr)
-                            }
-                            foundLastUserMessage = true
-                        }
+                if !isMeta,
+                   let message = json["message"] as? [String: Any],
+                   let msgContent = message["content"] as? String,
+                   let cleanedMsgContent = Self.stripConversationMetadata(from: msgContent),
+                   !cleanedMsgContent.hasPrefix("<command-name>"),
+                   !cleanedMsgContent.hasPrefix("<local-command"),
+                   !cleanedMsgContent.hasPrefix("Caveat:") {
+                    if let timestampStr = json["timestamp"] as? String {
+                        lastUserMessageDate = formatter.date(from: timestampStr)
                     }
+                    foundLastUserMessage = true
                 }
             }
 
@@ -197,7 +211,7 @@ actor ConversationParser {
                 summary = summaryText
             }
 
-            if summary != nil && lastMessage != nil && foundLastUserMessage {
+            if summary != nil, lastMessage != nil, foundLastUserMessage {
                 break
             }
         }
@@ -211,6 +225,10 @@ actor ConversationParser {
             lastUserMessageDate: lastUserMessageDate
         )
     }
+
+}
+
+extension ConversationParser {
 
     /// Format tool input for display in instance list
     private static func formatToolInput(_ input: [String: Any]?, toolName: String) -> String {
@@ -573,13 +591,16 @@ actor ConversationParser {
         var blocks: [MessageBlock] = []
 
         if let content = messageDict["content"] as? String {
-            if content.hasPrefix("<command-name>") || content.hasPrefix("<local-command") || content.hasPrefix("Caveat:") {
+            guard let visibleContent = Self.stripConversationMetadata(from: content) else {
                 return nil
             }
-            if content.hasPrefix("[Request interrupted by user") {
+            if visibleContent.hasPrefix("<command-name>") || visibleContent.hasPrefix("<local-command") || visibleContent.hasPrefix("Caveat:") {
+                return nil
+            }
+            if visibleContent.hasPrefix("[Request interrupted by user") {
                 blocks.append(.interrupted)
             } else {
-                blocks.append(.text(content))
+                blocks.append(.text(visibleContent))
             }
         } else if let contentArray = messageDict["content"] as? [[String: Any]] {
             for block in contentArray {
@@ -587,10 +608,12 @@ actor ConversationParser {
                     switch blockType {
                     case "text":
                         if let text = block["text"] as? String {
-                            if text.hasPrefix("[Request interrupted by user") {
-                                blocks.append(.interrupted)
-                            } else {
-                                blocks.append(.text(text))
+                            if let visibleText = Self.stripConversationMetadata(from: text) {
+                                if visibleText.hasPrefix("[Request interrupted by user") {
+                                    blocks.append(.interrupted)
+                                } else {
+                                    blocks.append(.text(visibleText))
+                                }
                             }
                         }
                     case "tool_use":
@@ -627,6 +650,26 @@ actor ConversationParser {
             timestamp: timestamp,
             content: blocks
         )
+    }
+
+    private static func stripConversationMetadata(from rawText: String) -> String? {
+        var text = rawText
+
+        let patterns = [
+            #"<environment_context>[\s\S]*?</environment_context>"#,
+            #"<permissions instructions>[\s\S]*?</permissions instructions>"#,
+            #"<app-context>[\s\S]*?</app-context>"#,
+            #"<collaboration_mode>[\s\S]*?</collaboration_mode>"#,
+            #"<skills_instructions>[\s\S]*?</skills_instructions>"#,
+            #"<plugins_instructions>[\s\S]*?</plugins_instructions>"#
+        ]
+
+        for pattern in patterns {
+            text = text.replacingOccurrences(of: pattern, with: " ", options: [.regularExpression])
+        }
+
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private func parseToolUse(_ block: [String: Any]) -> ToolUseBlock? {

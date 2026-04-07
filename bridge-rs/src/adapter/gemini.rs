@@ -1,6 +1,19 @@
 use serde_json::{json, Value};
 
-use super::{default_process_info, normalize_input_with_options, BridgeCapabilities, NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo, SourceAdapter};
+use super::{
+    default_extra_payload, default_process_info, normalize_input_with_options, BridgeCapabilities,
+    NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo, SourceAdapter,
+    HOOK_EVENT_AFTER_TOOL, HOOK_EVENT_BEFORE_TOOL, HOOK_EVENT_NOTIFICATION,
+    HOOK_EVENT_POST_TOOL_USE, HOOK_EVENT_PRE_TOOL_USE, HOOK_EVENT_SESSION_END,
+    HOOK_EVENT_SESSION_START, HOOK_EVENT_STOP, HOOK_EVENT_SUBAGENT_STOP,
+    HOOK_EVENT_USER_PROMPT_SUBMIT, HOOK_STATUS_ENDED, HOOK_STATUS_NOTIFICATION,
+    HOOK_STATUS_PROCESSING, HOOK_STATUS_RUNNING_TOOL, HOOK_STATUS_WAITING_FOR_APPROVAL,
+    HOOK_STATUS_WAITING_FOR_INPUT, INTERNAL_EVENT_IDLE_PROMPT,
+    INTERNAL_EVENT_NOTIFICATION, INTERNAL_EVENT_PERMISSION_REQUESTED,
+    INTERNAL_EVENT_SESSION_ENDED, INTERNAL_EVENT_SESSION_STARTED,
+    INTERNAL_EVENT_STOPPED, INTERNAL_EVENT_TOOL_DID_RUN, INTERNAL_EVENT_TOOL_WILL_RUN,
+    INTERNAL_EVENT_UNKNOWN, NOTIFICATION_TYPE_IDLE_PROMPT, PERMISSION_MODE_NATIVE_APP,
+};
 
 pub struct GeminiAdapter;
 
@@ -46,7 +59,7 @@ impl SourceAdapter for GeminiAdapter {
     fn capabilities(&self) -> BridgeCapabilities {
         BridgeCapabilities {
             permission: PermissionCapability {
-                approval_request_events: &["PreToolUse", "BeforeTool"],
+                approval_request_events: &[HOOK_EVENT_BEFORE_TOOL],
             },
         }
     }
@@ -61,24 +74,85 @@ impl SourceAdapter for GeminiAdapter {
 
     fn status_for_event(&self, normalized: &NormalizedInput) -> String {
         match normalized.hook_event.as_str() {
-            "SessionStart" => "waiting_for_input".to_string(),
-            "SessionEnd" => "ended".to_string(),
-            "Notification" => {
-                if normalized.notification_type.as_deref() == Some("idle_prompt") {
-                    "waiting_for_input".to_string()
+            HOOK_EVENT_SESSION_START => HOOK_STATUS_WAITING_FOR_INPUT.to_string(),
+            HOOK_EVENT_SESSION_END => HOOK_STATUS_ENDED.to_string(),
+            HOOK_EVENT_NOTIFICATION => {
+                if normalized.notification_type.as_deref() == Some(NOTIFICATION_TYPE_IDLE_PROMPT) {
+                    HOOK_STATUS_WAITING_FOR_INPUT.to_string()
                 } else {
-                    "notification".to_string()
+                    HOOK_STATUS_NOTIFICATION.to_string()
                 }
             }
-            "Stop" | "SubagentStop" => "waiting_for_input".to_string(),
-            "PreToolUse" => "running_tool".to_string(),
-            "PostToolUse" | "UserPromptSubmit" => "processing".to_string(),
-            _ => "processing".to_string(),
+            HOOK_EVENT_STOP | HOOK_EVENT_SUBAGENT_STOP => HOOK_STATUS_WAITING_FOR_INPUT.to_string(),
+            HOOK_EVENT_BEFORE_TOOL | HOOK_EVENT_PRE_TOOL_USE => HOOK_STATUS_RUNNING_TOOL.to_string(),
+            HOOK_EVENT_AFTER_TOOL | HOOK_EVENT_POST_TOOL_USE | HOOK_EVENT_USER_PROMPT_SUBMIT => {
+                HOOK_STATUS_PROCESSING.to_string()
+            }
+            _ => HOOK_STATUS_PROCESSING.to_string(),
         }
     }
 
     fn process_info(&self, input: &Value) -> ProcessInfo {
         default_process_info(input)
+    }
+
+    fn internal_event(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+        status: &str,
+    ) -> String {
+        if status == HOOK_STATUS_WAITING_FOR_APPROVAL {
+            return INTERNAL_EVENT_PERMISSION_REQUESTED.to_string();
+        }
+
+        match normalized.hook_event.as_str() {
+            HOOK_EVENT_SESSION_START => INTERNAL_EVENT_SESSION_STARTED.to_string(),
+            HOOK_EVENT_SESSION_END => INTERNAL_EVENT_SESSION_ENDED.to_string(),
+            HOOK_EVENT_NOTIFICATION => {
+                if normalized.notification_type.as_deref() == Some(NOTIFICATION_TYPE_IDLE_PROMPT) {
+                    INTERNAL_EVENT_IDLE_PROMPT.to_string()
+                } else {
+                    INTERNAL_EVENT_NOTIFICATION.to_string()
+                }
+            }
+            HOOK_EVENT_STOP => INTERNAL_EVENT_STOPPED.to_string(),
+            HOOK_EVENT_BEFORE_TOOL | HOOK_EVENT_PRE_TOOL_USE => INTERNAL_EVENT_TOOL_WILL_RUN.to_string(),
+            HOOK_EVENT_AFTER_TOOL | HOOK_EVENT_POST_TOOL_USE | HOOK_EVENT_USER_PROMPT_SUBMIT => {
+                INTERNAL_EVENT_TOOL_DID_RUN.to_string()
+            }
+            _ => INTERNAL_EVENT_UNKNOWN.to_string(),
+        }
+    }
+
+    fn permission_mode(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+        status: &str,
+    ) -> Option<String> {
+        if status == HOOK_STATUS_WAITING_FOR_APPROVAL
+            || normalized.hook_event == HOOK_EVENT_BEFORE_TOOL
+        {
+            return Some(PERMISSION_MODE_NATIVE_APP.to_string());
+        }
+
+        None
+    }
+
+    fn extra_payload(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+    ) -> Value {
+        let mut extra = default_extra_payload(normalized);
+        if let Value::Object(ref mut object) = extra {
+            object.insert(
+                "officialPermissionEvent".to_string(),
+                Value::String(HOOK_EVENT_BEFORE_TOOL.to_string()),
+            );
+        }
+        extra
     }
 
     fn permission_response(

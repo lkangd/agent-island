@@ -1,8 +1,19 @@
 # Multi-Agent Architecture Draft
 
+Related docs:
+
+- [Docs Index](./README.md)
+- [Internal Hook Protocol](./internal-hook-protocol.md)
+- [Agent Extension Guide](./agent-extension-guide.md)
+
 ## Goal
 
 Agent Island should treat `Claude`, `Codex`, `Gemini`, and future hook-capable agents as integrations on top of one shared runtime, not as separate product implementations.
+
+Current implementation note:
+
+- official hook differences are handled in agent-specific adapters
+- UI and session state are moving toward the internal hook protocol documented in `docs/internal-hook-protocol.md`
 
 The architecture goal is:
 
@@ -13,6 +24,19 @@ For internal app flow, the preferred transport is a lightweight event bus:
 `Input Adapter -> AgentEventBus -> Capability Dispatcher / Core Engine -> View State -> UI`
 
 This document defines the target shape for that flow and the contracts new agents should implement.
+
+## Runtime Diagram
+
+```mermaid
+flowchart LR
+    A["Official Hooks<br/>Claude / Codex / Gemini"] --> B["Rust Bridge<br/>agent-island-bridge"]
+    B --> C["Agent-Specific Adapters<br/>official protocol handling"]
+    C --> D["Internal Hook Protocol<br/>internal_event / permission_mode / extra"]
+    D --> E["HookSocketServer"]
+    E --> F["Capability Dispatcher"]
+    F --> G["SessionStore / Core Session Engine"]
+    G --> H["UI<br/>Notch / Session Views / Approval Flow"]
+```
 
 ## Design Principles
 
@@ -37,11 +61,11 @@ Examples:
 
 Current examples in the codebase:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/reference/bridge/agent-island-state.py`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/bridge-rs/src/main.rs`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/bridge-rs/src/adapter/claude.rs`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/bridge-rs/src/adapter/codex.rs`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/bridge-rs/src/adapter/gemini.rs`
+- `reference/bridge/agent-island-state.py`
+- `bridge-rs/src/main.rs`
+- `bridge-rs/src/adapter/claude.rs`
+- `bridge-rs/src/adapter/codex.rs`
+- `bridge-rs/src/adapter/gemini.rs`
 
 Preferred bridge shape:
 
@@ -54,8 +78,8 @@ Current direction:
 
 - `agent-island-bridge` is the bundled runtime entrypoint
 - source-specific behavior lives in per-agent Rust adapters instead of a shared shell script
-- the legacy Python bridge source remains in-repo under `/Users/javen/Documents/Workspace/private/helper/agent-island/reference/bridge` for reference only
-- the active runtime implementation lives at `/Users/javen/Documents/Workspace/private/helper/agent-island/bridge-rs`
+- the legacy Python bridge source remains in-repo under `reference/bridge` for reference only
+- the active runtime implementation lives at `bridge-rs`
 
 ### 2. Ingress Engine
 
@@ -70,7 +94,7 @@ Responsibilities:
 
 Current implementation:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Hooks/HookSocketServer.swift`
+- `AgentIsland/Services/Hooks/HookSocketServer.swift`
 
 ### 3. Capability Dispatcher
 
@@ -88,7 +112,7 @@ Target state:
 
 Current scaffold:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Shared/CapabilityDispatcher.swift`
+- `AgentIsland/Services/Shared/CapabilityDispatcher.swift`
 
 Currently routed through the dispatcher:
 
@@ -115,10 +139,10 @@ Recommended adapter families:
 
 Current partial implementations:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Hooks/AgentHookPlugin.swift`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Hooks/AgentPermissionAdapter.swift`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Session/SessionTranscriptProvider.swift`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Session/AgentRuntimeObserver.swift`
+- `AgentIsland/Services/Hooks/AgentHookPlugin.swift`
+- `AgentIsland/Services/Hooks/AgentPermissionAdapter.swift`
+- `AgentIsland/Services/Session/SessionTranscriptProvider.swift`
+- `AgentIsland/Services/Session/AgentRuntimeObserver.swift`
 
 ### 5. Core Session Engine
 
@@ -137,7 +161,13 @@ This layer should not care whether the source agent is Claude or Codex.
 
 Current implementation:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/State/SessionStore.swift`
+- `AgentIsland/Services/State/SessionStore.swift`
+
+Current concrete direction:
+
+- official hook payloads are normalized in Rust
+- `HookPayload` now carries stable fields such as `internal_event`, `permission_mode`, and `extra`
+- Swift runtime should prefer those stable fields over raw official event names
 
 ## Event Bus
 
@@ -154,7 +184,7 @@ Recommended event split:
 
 Current scaffold:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Shared/AgentEventBus.swift`
+- `AgentIsland/Services/Shared/AgentEventBus.swift`
 
 ### 6. Output
 
@@ -170,9 +200,9 @@ Responsibilities:
 
 Current implementations:
 
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/UI/Views/ChatView.swift`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/UI/Views/NotchView.swift`
-- `/Users/javen/Documents/Workspace/private/helper/agent-island/AgentIsland/Services/Session/ClaudeSessionMonitor.swift`
+- `AgentIsland/UI/Views/ChatView.swift`
+- `AgentIsland/UI/Views/NotchView.swift`
+- `AgentIsland/Services/Session/ClaudeSessionMonitor.swift`
 
 ## Capability Model
 
@@ -193,6 +223,8 @@ Each capability should answer:
 - What adapter implements it?
 - What is the source format?
 - What are the known limitations?
+
+For the concrete integration checklist, continue with the [Agent Extension Guide](./agent-extension-guide.md).
 
 ## Standard Internal Contracts
 

@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct TerminalColors {
+    static let claude = Color(red: 0.18, green: 0.73, blue: 0.99)
     static let green = Color(red: 0.4, green: 0.75, blue: 0.45)
     static let amber = Color(red: 1.0, green: 0.7, blue: 0.0)
     static let red = Color(red: 1.0, green: 0.3, blue: 0.3)

@@ -50,7 +50,7 @@ enum AgentPlatform: String, Codable, CaseIterable, Sendable {
     var accentColor: Color {
         switch self {
         case .claude:
-            return Color(red: 0.85, green: 0.47, blue: 0.34)
+            return TerminalColors.claude
         case .codex:
             return Color(red: 0.06, green: 0.64, blue: 0.50)
         case .gemini:
@@ -60,13 +60,13 @@ enum AgentPlatform: String, Codable, CaseIterable, Sendable {
 
     var iconSymbol: String {
         switch self {
-        case .claude: return "brain.head.profile"
+        case .claude: return "brain.head.profile.fill"
         case .codex: return "terminal"
         case .gemini: return "sparkles"
         }
     }
 
-    var approvalCapability: ApprovalCapability {
+    nonisolated var approvalCapability: ApprovalCapability {
         switch self {
         case .claude:
             return ApprovalCapability(
@@ -75,7 +75,7 @@ enum AgentPlatform: String, Codable, CaseIterable, Sendable {
             )
         case .codex:
             return ApprovalCapability(
-                kind: .terminalOnly,
+                kind: .nativeInteractive,
                 supportedPolicies: [.deny, .allowOnce, .allowAlways, .autoExecute]
             )
         case .gemini:

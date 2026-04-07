@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create a release: notarize, create DMG, sign for Sparkle, upload to GitHub, update website
+# Create a release: notarize, create DMG, sign for Sparkle, upload to GitHub, prepare GitHub Pages appcast
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,9 +12,7 @@ KEYS_DIR="$PROJECT_DIR/.sparkle-keys"
 # GitHub repository (owner/repo format)
 GITHUB_REPO="javen-yan/agent-island"
 
-# Website repo for auto-updating appcast
-WEBSITE_DIR="${AGENT_ISLAND_WEBSITE:-${AGENT_ISLAND_WEBSITE:-$PROJECT_DIR/../AgentIsland-website}}"
-WEBSITE_PUBLIC="$WEBSITE_DIR/public"
+PAGES_OUTPUT_DIR="${AGENT_ISLAND_PAGES_DIR:-$BUILD_DIR/pages}"
 
 APP_PATH="$EXPORT_PATH/Agent Island.app"
 APP_NAME="AgentIsland"
@@ -235,58 +233,24 @@ fi
 echo ""
 
 # ============================================
-# Step 6: Update website appcast and deploy
+# Step 6: Prepare GitHub Pages appcast payload
 # ============================================
-echo "=== Step 6: Updating Website ==="
+echo "=== Step 6: Preparing GitHub Pages Payload ==="
 
-if [ -d "$WEBSITE_PUBLIC" ] && [ -f "$RELEASE_DIR/appcast/appcast.xml" ]; then
-    # Copy appcast to website
-    cp "$RELEASE_DIR/appcast/appcast.xml" "$WEBSITE_PUBLIC/appcast.xml"
+if [ -f "$RELEASE_DIR/appcast/appcast.xml" ]; then
+    mkdir -p "$PAGES_OUTPUT_DIR"
+    cp "$RELEASE_DIR/appcast/appcast.xml" "$PAGES_OUTPUT_DIR/appcast.xml"
 
-    # Update the download URL in appcast to point to GitHub releases
     if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
-        sed -i '' "s|url=\"[^\"]*$APP_NAME-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$WEBSITE_PUBLIC/appcast.xml"
-        echo "Updated appcast.xml with GitHub download URL"
+        sed -i '' "s|url=\"[^\"]*$APP_NAME-$VERSION.dmg\"|url=\"$GITHUB_DOWNLOAD_URL\"|g" "$PAGES_OUTPUT_DIR/appcast.xml"
+        echo "Updated appcast.xml with GitHub release download URL"
     fi
 
-    # Update src/config.ts with latest version and download URL
-    CONFIG_FILE="$WEBSITE_DIR/src/config.ts"
-    if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
-        cat > "$CONFIG_FILE" << EOF
-// Auto-updated by create-release.sh
-export const LATEST_VERSION = "$VERSION";
-export const DOWNLOAD_URL = "$GITHUB_DOWNLOAD_URL";
-EOF
-        echo "Updated src/config.ts with version $VERSION"
-    fi
-
-    # Commit and push website changes
-    cd "$WEBSITE_DIR"
-    if [ -d ".git" ]; then
-        git add public/appcast.xml src/config.ts
-        if ! git diff --cached --quiet; then
-            git commit -m "Update appcast for v$VERSION"
-            echo "Committed appcast update"
-
-            read -p "Push website changes to deploy? (Y/n) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-                git push
-                echo "Website deployed!"
-            else
-                echo "Changes committed but not pushed. Run 'git push' in $WEBSITE_DIR to deploy."
-            fi
-        else
-            echo "No changes to commit"
-        fi
-    else
-        echo "Copied appcast.xml to $WEBSITE_PUBLIC/"
-        echo "Note: Website directory is not a git repo"
-    fi
-    cd "$PROJECT_DIR"
+    echo "Prepared appcast.xml at $PAGES_OUTPUT_DIR/appcast.xml"
+    echo "Publish this file to GitHub Pages to serve Sparkle updates."
 else
-    echo "Website directory not found or appcast not generated"
-    echo "Skipping website update."
+    echo "Appcast not generated"
+    echo "Skipping GitHub Pages payload preparation."
 fi
 
 echo ""
@@ -301,6 +265,6 @@ fi
 if [ -n "$GITHUB_DOWNLOAD_URL" ]; then
     echo "  - GitHub: https://github.com/$GITHUB_REPO/releases/tag/v$VERSION"
 fi
-if [ -f "$WEBSITE_PUBLIC/appcast.xml" ]; then
-    echo "  - Website: $WEBSITE_PUBLIC/appcast.xml"
+if [ -f "$PAGES_OUTPUT_DIR/appcast.xml" ]; then
+    echo "  - Pages payload: $PAGES_OUTPUT_DIR/appcast.xml"
 fi

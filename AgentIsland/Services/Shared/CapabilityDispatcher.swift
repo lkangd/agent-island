@@ -7,11 +7,7 @@
 
 import Foundation
 
-protocol CapabilityDispatcher: Sendable {
-    func handle(_ event: AgentIngressEvent) async
-}
-
-actor DefaultCapabilityDispatcher: CapabilityDispatcher {
+actor DefaultCapabilityDispatcher {
     nonisolated static let shared = DefaultCapabilityDispatcher()
 
     func handle(_ event: AgentIngressEvent) async {
@@ -36,7 +32,7 @@ actor DefaultCapabilityDispatcher: CapabilityDispatcher {
                 }
             }
 
-            if hookEvent.status == "ended" {
+            if hookEvent.isSessionEnded {
                 await MainActor.run {
                     AgentInteractionRegistry.shared.stopObservingIfSupported(
                         sessionId: hookEvent.sessionId,
@@ -45,11 +41,12 @@ actor DefaultCapabilityDispatcher: CapabilityDispatcher {
                 }
             }
 
-            if hookEvent.event == "Stop" {
+            if case .stop = hookEvent.domainEvent {
                 await HookSocketServer.shared.cancelPendingPermissions(sessionId: hookEvent.sessionId)
             }
 
-            if hookEvent.event == "PostToolUse", let toolUseId = hookEvent.toolUseId {
+            if case .postToolUse = hookEvent.domainEvent,
+               let toolUseId = hookEvent.toolUseId {
                 await HookSocketServer.shared.cancelPendingPermission(toolUseId: toolUseId)
             }
 

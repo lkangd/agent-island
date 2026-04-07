@@ -1,6 +1,10 @@
 use serde_json::Value;
 
-use super::{default_process_info, default_status_for_event, normalize_input_with_options, BridgeCapabilities, NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo, SourceAdapter};
+use super::{
+    default_process_info, default_status_for_event, normalize_input_with_options,
+    BridgeCapabilities, NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo,
+    SourceAdapter,
+};
 
 pub struct UnknownAdapter;
 
@@ -22,7 +26,10 @@ impl SourceAdapter for UnknownAdapter {
     }
 
     fn status_for_event(&self, normalized: &NormalizedInput) -> String {
-        default_status_for_event(&normalized.hook_event, normalized.notification_type.as_deref())
+        default_status_for_event(
+            &normalized.hook_event,
+            normalized.notification_type.as_deref(),
+        )
     }
 
     fn process_info(&self, input: &Value) -> ProcessInfo {

@@ -3,7 +3,23 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
-use super::{first_string, normalize_input_with_options, BridgeCapabilities, NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo, SourceAdapter};
+use super::{
+    default_extra_payload, first_string, normalize_input_with_options, BridgeCapabilities,
+    NormalizedInput, NormalizedInputOptions, PermissionCapability, ProcessInfo, SourceAdapter,
+    HOOK_EVENT_NOTIFICATION, HOOK_EVENT_PERMISSION_REQUEST, HOOK_EVENT_POST_TOOL_USE,
+    HOOK_EVENT_PRE_COMPACT, HOOK_EVENT_PRE_TOOL_USE, HOOK_EVENT_SESSION_END,
+    HOOK_EVENT_SESSION_START, HOOK_EVENT_STOP, HOOK_EVENT_SUBAGENT_STOP,
+    HOOK_EVENT_USER_PROMPT_SUBMIT, HOOK_STATUS_COMPACTING, HOOK_STATUS_ENDED,
+    HOOK_STATUS_NOTIFICATION, HOOK_STATUS_PROCESSING, HOOK_STATUS_RUNNING_TOOL,
+    HOOK_STATUS_UNKNOWN, HOOK_STATUS_WAITING_FOR_APPROVAL, HOOK_STATUS_WAITING_FOR_INPUT,
+    INTERNAL_EVENT_IDLE_PROMPT, INTERNAL_EVENT_NOTIFICATION,
+    INTERNAL_EVENT_PERMISSION_REQUESTED, INTERNAL_EVENT_PRE_COMPACT,
+    INTERNAL_EVENT_SESSION_ENDED, INTERNAL_EVENT_SESSION_STARTED,
+    INTERNAL_EVENT_STOPPED, INTERNAL_EVENT_SUBAGENT_STOPPED, INTERNAL_EVENT_TOOL_DID_RUN,
+    INTERNAL_EVENT_TOOL_WILL_RUN, INTERNAL_EVENT_UNKNOWN,
+    INTERNAL_EVENT_USER_PROMPT_SUBMITTED, NOTIFICATION_TYPE_IDLE_PROMPT,
+    NOTIFICATION_TYPE_PERMISSION_PROMPT, PERMISSION_MODE_NATIVE_APP,
+};
 
 pub struct ClaudeAdapter;
 
@@ -59,26 +75,29 @@ impl SourceAdapter for ClaudeAdapter {
     }
 
     fn should_emit_event(&self, normalized: &NormalizedInput) -> bool {
-        !(normalized.hook_event == "Notification" && normalized.notification_type.as_deref() == Some("permission_prompt"))
+        !(normalized.hook_event == HOOK_EVENT_NOTIFICATION
+            && normalized.notification_type.as_deref() == Some(NOTIFICATION_TYPE_PERMISSION_PROMPT))
     }
 
     fn status_for_event(&self, normalized: &NormalizedInput) -> String {
         match normalized.hook_event.as_str() {
-            "SessionStart" => "waiting_for_input".to_string(),
-            "SessionEnd" => "ended".to_string(),
-            "Notification" => {
-                if normalized.notification_type.as_deref() == Some("idle_prompt") {
-                    "waiting_for_input".to_string()
+            HOOK_EVENT_SESSION_START => HOOK_STATUS_WAITING_FOR_INPUT.to_string(),
+            HOOK_EVENT_SESSION_END => HOOK_STATUS_ENDED.to_string(),
+            HOOK_EVENT_NOTIFICATION => {
+                if normalized.notification_type.as_deref() == Some(NOTIFICATION_TYPE_IDLE_PROMPT) {
+                    HOOK_STATUS_WAITING_FOR_INPUT.to_string()
                 } else {
-                    "notification".to_string()
+                    HOOK_STATUS_NOTIFICATION.to_string()
                 }
             }
-            "Stop" | "SubagentStop" => "waiting_for_input".to_string(),
-            "PreToolUse" => "running_tool".to_string(),
-            "PostToolUse" | "UserPromptSubmit" => "processing".to_string(),
-            "PreCompact" => "compacting".to_string(),
-            "PermissionRequest" => "waiting_for_approval".to_string(),
-            _ => "unknown".to_string(),
+            HOOK_EVENT_STOP | HOOK_EVENT_SUBAGENT_STOP => HOOK_STATUS_WAITING_FOR_INPUT.to_string(),
+            HOOK_EVENT_PRE_TOOL_USE => HOOK_STATUS_RUNNING_TOOL.to_string(),
+            HOOK_EVENT_POST_TOOL_USE | HOOK_EVENT_USER_PROMPT_SUBMIT => {
+                HOOK_STATUS_PROCESSING.to_string()
+            }
+            HOOK_EVENT_PRE_COMPACT => HOOK_STATUS_COMPACTING.to_string(),
+            HOOK_EVENT_PERMISSION_REQUEST => HOOK_STATUS_WAITING_FOR_APPROVAL.to_string(),
+            _ => HOOK_STATUS_UNKNOWN.to_string(),
         }
     }
 
@@ -87,6 +106,63 @@ impl SourceAdapter for ClaudeAdapter {
             pid: Some(parent_pid() as i64),
             tty: resolve_claude_tty().or_else(|| first_string(input, &["tty"])),
         }
+    }
+
+    fn internal_event(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+        _status: &str,
+    ) -> String {
+        match normalized.hook_event.as_str() {
+            HOOK_EVENT_NOTIFICATION => {
+                if normalized.notification_type.as_deref() == Some(NOTIFICATION_TYPE_IDLE_PROMPT) {
+                    INTERNAL_EVENT_IDLE_PROMPT.to_string()
+                } else {
+                    INTERNAL_EVENT_NOTIFICATION.to_string()
+                }
+            }
+            HOOK_EVENT_PRE_COMPACT => INTERNAL_EVENT_PRE_COMPACT.to_string(),
+            HOOK_EVENT_SESSION_START => INTERNAL_EVENT_SESSION_STARTED.to_string(),
+            HOOK_EVENT_SESSION_END => INTERNAL_EVENT_SESSION_ENDED.to_string(),
+            HOOK_EVENT_STOP => INTERNAL_EVENT_STOPPED.to_string(),
+            HOOK_EVENT_SUBAGENT_STOP => INTERNAL_EVENT_SUBAGENT_STOPPED.to_string(),
+            HOOK_EVENT_PRE_TOOL_USE => INTERNAL_EVENT_TOOL_WILL_RUN.to_string(),
+            HOOK_EVENT_POST_TOOL_USE => INTERNAL_EVENT_TOOL_DID_RUN.to_string(),
+            HOOK_EVENT_USER_PROMPT_SUBMIT => INTERNAL_EVENT_USER_PROMPT_SUBMITTED.to_string(),
+            HOOK_EVENT_PERMISSION_REQUEST => INTERNAL_EVENT_PERMISSION_REQUESTED.to_string(),
+            _ => INTERNAL_EVENT_UNKNOWN.to_string(),
+        }
+    }
+
+    fn permission_mode(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+        status: &str,
+    ) -> Option<String> {
+        if status == HOOK_STATUS_WAITING_FOR_APPROVAL
+            || normalized.hook_event == HOOK_EVENT_PERMISSION_REQUEST
+        {
+            return Some(PERMISSION_MODE_NATIVE_APP.to_string());
+        }
+
+        None
+    }
+
+    fn extra_payload(
+        &self,
+        _profile: &crate::protocol::BridgeProfile,
+        normalized: &NormalizedInput,
+    ) -> Value {
+        let mut extra = default_extra_payload(normalized);
+        if let Value::Object(ref mut object) = extra {
+            object.insert(
+                "officialPermissionEvent".to_string(),
+                Value::String(HOOK_EVENT_PERMISSION_REQUEST.to_string()),
+            );
+        }
+        extra
     }
 
     fn permission_response(
@@ -98,13 +174,13 @@ impl SourceAdapter for ClaudeAdapter {
         match decision {
             Some("allow") => Some(json!({
                 "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
+                    "hookEventName": HOOK_EVENT_PERMISSION_REQUEST,
                     "decision": { "behavior": "allow" }
                 }
             })),
             Some("deny") => Some(json!({
                 "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
+                    "hookEventName": HOOK_EVENT_PERMISSION_REQUEST,
                     "decision": {
                         "behavior": "deny",
                         "message": reason.unwrap_or("Denied by user via Agent Island")

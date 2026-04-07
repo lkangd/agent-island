@@ -372,14 +372,14 @@ private actor CodexTranscriptProvider: SessionTranscriptProvider {
 
         switch payloadType {
         case "user_message":
-            if let text = normalizedText(from: payload["message"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let text = cleanedPreviewText(normalizedText(from: payload["message"])?.trimmingCharacters(in: .whitespacesAndNewlines)),
                !text.isEmpty {
                 lastPreviewMessage = text
                 lastPreviewRole = "user"
             }
             return nil
         case "agent_message":
-            if let text = normalizedText(from: payload["message"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let text = cleanedPreviewText(normalizedText(from: payload["message"])?.trimmingCharacters(in: .whitespacesAndNewlines)),
                !text.isEmpty {
                 lastPreviewMessage = text
                 lastPreviewRole = "assistant"
@@ -481,7 +481,7 @@ private actor CodexTranscriptProvider: SessionTranscriptProvider {
         }
 
         let text = textBlocks.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
+        guard let text = cleanedTitleText(text), !text.isEmpty else { return nil }
 
         return ChatMessage(
             id: "\(timestamp.timeIntervalSince1970)-\(lineIndex)-\(role.rawValue)-response",
@@ -498,7 +498,7 @@ private actor CodexTranscriptProvider: SessionTranscriptProvider {
     ) -> ChatMessage? {
         let summaryText = normalizedReasoningSummary(from: payload["summary"])
         let contentText = normalizedText(from: payload["content"])?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let text = summaryText ?? contentText, !text.isEmpty else {
+        guard let text = cleanedPreviewText(summaryText ?? contentText), !text.isEmpty else {
             return nil
         }
 

@@ -44,7 +44,13 @@ pub fn send_sync(socket_path: &str, payload: &HookPayload) -> Result<PermissionD
 
     let json: serde_json::Value = serde_json::from_slice(&response)?;
     Ok(PermissionDecision {
-        decision: json.get("decision").and_then(|v| v.as_str()).map(str::to_owned),
-        reason: json.get("reason").and_then(|v| v.as_str()).map(str::to_owned),
+        decision: json
+            .get("decision")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        reason: json
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
     })
 }

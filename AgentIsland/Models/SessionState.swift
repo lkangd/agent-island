@@ -11,6 +11,8 @@ import Foundation
 /// Complete state for a single tracked agent session
 /// This is the single source of truth - all state reads and writes go through SessionStore
 struct SessionState: Equatable, Identifiable, Sendable {
+    nonisolated private static let defaultPhaseSources = SessionPhaseSources()
+
     // MARK: - Identity
 
     let sessionId: String
@@ -77,17 +79,14 @@ struct SessionState: Equatable, Identifiable, Sendable {
         tty: String? = nil,
         isInTmux: Bool = false,
         phase: SessionPhase = .idle,
-        phaseSources: SessionPhaseSources = SessionPhaseSources(),
+        phaseSources: SessionPhaseSources? = nil,
         chatItems: [ChatHistoryItem] = [],
-        toolTracker: ToolTracker = ToolTracker(),
-        subagentState: SubagentState = SubagentState(),
-        conversationInfo: ConversationInfo = ConversationInfo(
-            summary: nil, lastMessage: nil, lastMessageRole: nil,
-            lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil
-        ),
+        toolTracker: ToolTracker? = nil,
+        subagentState: SubagentState? = nil,
+        conversationInfo: ConversationInfo? = nil,
         needsClearReconciliation: Bool = false,
-        lastActivity: Date = Date(),
-        createdAt: Date = Date()
+        lastActivity: Date? = nil,
+        createdAt: Date? = nil
     ) {
         self.sessionId = sessionId
         self.agentType = agentType
@@ -98,14 +97,17 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.tty = tty
         self.isInTmux = isInTmux
         self.phase = phase
-        self.phaseSources = phaseSources
+        self.phaseSources = phaseSources ?? Self.defaultPhaseSources
         self.chatItems = chatItems
-        self.toolTracker = toolTracker
-        self.subagentState = subagentState
-        self.conversationInfo = conversationInfo
+        self.toolTracker = toolTracker ?? ToolTracker()
+        self.subagentState = subagentState ?? SubagentState()
+        self.conversationInfo = conversationInfo ?? ConversationInfo(
+            summary: nil, lastMessage: nil, lastMessageRole: nil,
+            lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil
+        )
         self.needsClearReconciliation = needsClearReconciliation
-        self.lastActivity = lastActivity
-        self.createdAt = createdAt
+        self.lastActivity = lastActivity ?? Date()
+        self.createdAt = createdAt ?? Date()
     }
 
     // MARK: - Derived Properties
@@ -116,7 +118,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     /// The active permission context, if any
-    var activePermission: PermissionContext? {
+    nonisolated var activePermission: PermissionContext? {
         if case .waitingForApproval(let ctx) = phase {
             return ctx
         }
@@ -184,12 +186,12 @@ struct SessionState: Equatable, Identifiable, Sendable {
     }
 
     /// Summary
-    var summary: String? {
+    nonisolated var summary: String? {
         conversationInfo.summary
     }
 
     /// First user message
-    var firstUserMessage: String? {
+    nonisolated var firstUserMessage: String? {
         conversationInfo.firstUserMessage
     }
 
@@ -203,7 +205,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         phase.needsAttention
     }
 
-    var listState: SessionListState {
+    nonisolated var listState: SessionListState {
         SessionListState(
             sessionId: sessionId,
             agentType: agentType,

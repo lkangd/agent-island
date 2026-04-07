@@ -40,7 +40,10 @@ pub struct BridgeProfile {
 impl BridgeProfile {
     pub fn from_json(value: &Value) -> Self {
         Self {
-            response_mode: value.get("responseMode").and_then(Value::as_str).map(str::to_owned),
+            response_mode: value
+                .get("responseMode")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             approval_tools: value
                 .get("approvalTools")
                 .and_then(Value::as_array)
@@ -74,7 +77,9 @@ pub struct HookPayload {
     pub agent_type: String,
     pub transcript_path: Option<String>,
     pub event: String,
+    pub internal_event: String,
     pub status: String,
+    pub permission_mode: Option<String>,
     pub pid: Option<i64>,
     pub tty: Option<String>,
     pub tool: Option<String>,
@@ -82,6 +87,7 @@ pub struct HookPayload {
     pub tool_use_id: Option<String>,
     pub notification_type: Option<String>,
     pub message: Option<String>,
+    pub extra: Value,
 }
 
 #[derive(Debug, Clone)]

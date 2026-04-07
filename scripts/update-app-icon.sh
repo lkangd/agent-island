@@ -2,17 +2,14 @@
 set -euo pipefail
 
 # Usage:
+#   ./scripts/update-app-icon.sh
 #   ./scripts/update-app-icon.sh /path/to/source-icon.png
 
-if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <path/to/source-icon-png>"
-    exit 1
-fi
-
-SRC_ICON="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 APPICON_DIR="$PROJECT_DIR/AgentIsland/Assets.xcassets/AppIcon.appiconset"
+DEFAULT_SRC_ICON="$PROJECT_DIR/agent-island.png"
+SRC_ICON="${1:-$DEFAULT_SRC_ICON}"
 
 if [ ! -f "$SRC_ICON" ]; then
     echo "ERROR: source icon not found: $SRC_ICON"
@@ -26,6 +23,28 @@ fi
 
 if ! command -v pngcheck >/dev/null 2>&1; then
     echo "WARN: pngcheck is not installed; skip PNG validity check."
+fi
+
+if command -v pngcheck >/dev/null 2>&1; then
+    pngcheck "$SRC_ICON" >/dev/null
+fi
+
+width="$(sips -g pixelWidth "$SRC_ICON" | awk '/pixelWidth:/ { print $2 }')"
+height="$(sips -g pixelHeight "$SRC_ICON" | awk '/pixelHeight:/ { print $2 }')"
+
+if [ -z "$width" ] || [ -z "$height" ]; then
+    echo "ERROR: unable to read source icon size: $SRC_ICON"
+    exit 1
+fi
+
+if [ "$width" != "$height" ]; then
+    echo "ERROR: source icon must be square, got ${width}x${height}"
+    exit 1
+fi
+
+if [ "$width" -lt 1024 ]; then
+    echo "ERROR: source icon must be at least 1024x1024, got ${width}x${height}"
+    exit 1
 fi
 
 ICON_MAP=(
@@ -48,7 +67,7 @@ for row in "${ICON_MAP[@]}"; do
 
     cp "$SRC_ICON" "$out_path"
     sips -s format png "$out_path" --out "$out_path" >/dev/null
-    sips -Z "$target_size" "$out_path" >/dev/null
+    sips -z "$target_size" "$target_size" "$out_path" >/dev/null
 done
 
 echo "Updated App icon files in:"

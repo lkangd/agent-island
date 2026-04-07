@@ -9,16 +9,14 @@
 import Foundation
 import os.log
 
-/// Logger for tool events
-private let logger = Logger(subsystem: "com.agentisland", category: "ToolEvents")
+nonisolated private let toolEventLogger = Logger(subsystem: "com.agentisland", category: "ToolEvents")
 
 /// Processes tool-related events and updates session state
 enum ToolEventProcessor {
-
     // MARK: - Tool Tracking
 
     /// Process PreToolUse event for tool tracking
-    static func processPreToolUse(
+    nonisolated static func processPreToolUse(
         event: HookEvent,
         session: inout SessionState
     ) {
@@ -29,15 +27,26 @@ enum ToolEventProcessor {
         let toolExists = session.chatItems.contains { $0.id == toolUseId }
         if !toolExists {
             let input = extractToolInput(from: event.toolInput)
+            let shouldAwaitPermission = event.shouldAwaitPermissionResponse
+            let approvalMode: ApprovalMode? = shouldAwaitPermission
+                ? ({
+                    switch event.approvalRequestType {
+                    case .terminal:
+                        return .terminal
+                    case .none, .app:
+                        return .nativeApp
+                    }
+                })()
+                : nil
             let initialStatus: ToolStatus =
-                (event.expectsResponse || event.requiresTerminalApproval) ? .waitingForApproval : .running
+                shouldAwaitPermission ? .waitingForApproval : .running
             let placeholderItem = ChatHistoryItem(
                 id: toolUseId,
                 type: .toolCall(ToolCallItem(
                     name: toolName,
                     input: input,
                     status: initialStatus,
-                    approvalMode: event.requiresTerminalApproval ? .terminal : ((event.expectsResponse || event.requiresTerminalApproval) ? .nativeApp : nil),
+                    approvalMode: approvalMode,
                     result: nil,
                     structuredResult: nil,
                     subagentTools: []
@@ -45,12 +54,12 @@ enum ToolEventProcessor {
                 timestamp: Date()
             )
             session.chatItems.append(placeholderItem)
-            logger.debug("Created placeholder tool entry for \(toolUseId.prefix(16), privacy: .public)")
+            toolEventLogger.debug("Created placeholder tool entry for \(toolUseId.prefix(16), privacy: .public)")
         }
     }
 
     /// Process PostToolUse event for tool tracking
-    static func processPostToolUse(
+    nonisolated static func processPostToolUse(
         event: HookEvent,
         session: inout SessionState
     ) {
@@ -60,7 +69,7 @@ enum ToolEventProcessor {
         updateToolStatus(in: &session, toolId: toolUseId, status: .success)
     }
 
-    static func processToolCompleted(
+    nonisolated static func processToolCompleted(
         session: inout SessionState,
         toolUseId: String,
         result: ToolCompletionResult
@@ -76,19 +85,19 @@ enum ToolEventProcessor {
                     type: .toolCall(tool),
                     timestamp: session.chatItems[i].timestamp
                 )
-                logger.debug("Tool \(toolUseId.prefix(12), privacy: .public) completed with status: \(String(describing: result.status), privacy: .public)")
+                toolEventLogger.debug("Tool \(toolUseId.prefix(12), privacy: .public) completed with status: \(String(describing: result.status), privacy: .public)")
                 return
             }
         }
 
         let count = session.chatItems.count
-        logger.warning("Completed tool \(toolUseId.prefix(16), privacy: .public) not found in chatItems (count: \(count))")
+        toolEventLogger.warning("Completed tool \(toolUseId.prefix(16), privacy: .public) not found in chatItems (count: \(count))")
     }
 
     // MARK: - Subagent Tracking
 
     /// Process PreToolUse event for subagent tracking
-    static func processSubagentPreToolUse(
+    nonisolated static func processSubagentPreToolUse(
         event: HookEvent,
         session: inout SessionState
     ) {
@@ -96,9 +105,9 @@ enum ToolEventProcessor {
 
         if event.tool == "Task" {
             session.subagentState.startTask(taskToolId: toolUseId)
-            logger.debug("Started Task subagent tracking: \(toolUseId.prefix(12), privacy: .public)")
+            toolEventLogger.debug("Started Task subagent tracking: \(toolUseId.prefix(12), privacy: .public)")
         } else if let toolName = event.tool, session.subagentState.hasActiveSubagent {
-            logger.debug("Adding subagent tool \(toolName, privacy: .public) to active Task")
+            toolEventLogger.debug("Adding subagent tool \(toolName, privacy: .public) to active Task")
             let input = extractToolInput(from: event.toolInput)
             let subagentTool = SubagentToolCall(
                 id: toolUseId,
@@ -112,7 +121,7 @@ enum ToolEventProcessor {
     }
 
     /// Process PostToolUse event for subagent tracking
-    static func processSubagentPostToolUse(
+    nonisolated static func processSubagentPostToolUse(
         event: HookEvent,
         session: inout SessionState
     ) {
@@ -120,14 +129,14 @@ enum ToolEventProcessor {
 
         if event.tool == "Task" {
             if let taskContext = session.subagentState.activeTasks[toolUseId] {
-                logger.debug("Task completing with \(taskContext.subagentTools.count) subagent tools")
+                toolEventLogger.debug("Task completing with \(taskContext.subagentTools.count) subagent tools")
                 attachSubagentToolsToTask(
                     session: &session,
                     taskToolId: toolUseId,
                     subagentTools: taskContext.subagentTools
                 )
             } else {
-                logger.debug("Task completing but no taskContext found for \(toolUseId.prefix(12), privacy: .public)")
+                toolEventLogger.debug("Task completing but no taskContext found for \(toolUseId.prefix(12), privacy: .public)")
             }
             session.subagentState.stopTask(taskToolId: toolUseId)
         } else {
@@ -136,7 +145,7 @@ enum ToolEventProcessor {
     }
 
     /// Transfer all active subagent tools before stop/interrupt
-    static func transferAllSubagentTools(session: inout SessionState, markAsInterrupted: Bool = false) {
+    nonisolated static func transferAllSubagentTools(session: inout SessionState, markAsInterrupted: Bool = false) {
         for (taskId, taskContext) in session.subagentState.activeTasks {
             var tools = taskContext.subagentTools
             if markAsInterrupted {
@@ -158,7 +167,7 @@ enum ToolEventProcessor {
     // MARK: - Tool Status Updates
 
     /// Update tool status in session's chat items
-    static func updateToolStatus(
+    nonisolated static func updateToolStatus(
         in session: inout SessionState,
         toolId: String,
         status: ToolStatus
@@ -177,11 +186,11 @@ enum ToolEventProcessor {
             }
         }
         let count = session.chatItems.count
-        logger.warning("Tool \(toolId.prefix(16), privacy: .public) not found in chatItems (count: \(count))")
+        toolEventLogger.warning("Tool \(toolId.prefix(16), privacy: .public) not found in chatItems (count: \(count))")
     }
 
     /// Find the next tool waiting for approval
-    static func findNextPendingTool(
+    nonisolated static func findNextPendingTool(
         in session: SessionState,
         excluding toolId: String
     ) -> (id: String, name: String, input: [String: String], mode: ApprovalMode, timestamp: Date)? {
@@ -201,7 +210,7 @@ enum ToolEventProcessor {
     }
 
     /// Mark all running tools as interrupted
-    static func markRunningToolsInterrupted(session: inout SessionState) {
+    nonisolated static func markRunningToolsInterrupted(session: inout SessionState) {
         for i in 0..<session.chatItems.count {
             if case .toolCall(var tool) = session.chatItems[i].type,
                tool.status == .running {
@@ -218,7 +227,7 @@ enum ToolEventProcessor {
     // MARK: - Private Helpers
 
     /// Attach subagent tools to a Task's ChatHistoryItem
-    private static func attachSubagentToolsToTask(
+    private nonisolated static func attachSubagentToolsToTask(
         session: inout SessionState,
         taskToolId: String,
         subagentTools: [SubagentToolCall]
@@ -234,14 +243,14 @@ enum ToolEventProcessor {
                     type: .toolCall(tool),
                     timestamp: session.chatItems[i].timestamp
                 )
-                logger.debug("Attached \(subagentTools.count) subagent tools to Task \(taskToolId.prefix(12), privacy: .public)")
+                toolEventLogger.debug("Attached \(subagentTools.count) subagent tools to Task \(taskToolId.prefix(12), privacy: .public)")
                 break
             }
         }
     }
 
     /// Extract tool input from AnyCodable dictionary
-    private static func extractToolInput(from hookInput: [String: AnyCodable]?) -> [String: String] {
+    private nonisolated static func extractToolInput(from hookInput: [String: AnyCodable]?) -> [String: String] {
         var input: [String: String] = [:]
         guard let hookInput = hookInput else { return input }
 

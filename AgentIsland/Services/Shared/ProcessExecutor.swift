@@ -39,22 +39,13 @@ struct ProcessResult: Sendable {
     var isSuccess: Bool { exitCode == 0 }
 }
 
-/// Protocol for executing shell commands (enables testing)
-protocol ProcessExecuting: Sendable {
-    func run(_ executable: String, arguments: [String]) async throws -> String
-    func runWithResult(_ executable: String, arguments: [String]) async -> Result<ProcessResult, ProcessExecutorError>
-    func runSync(_ executable: String, arguments: [String]) -> Result<String, ProcessExecutorError>
-}
-
 /// Default implementation using Foundation.Process
-actor ProcessExecutor: ProcessExecuting {
-    /// Shared instance (nonisolated(unsafe) required for actor init in static context)
-    nonisolated(unsafe) static let shared = ProcessExecutor()
-
+actor ProcessExecutor {
     /// Logger for process execution (nonisolated static for cross-context access)
     nonisolated static let logger = Logger(subsystem: "com.agentisland", category: "ProcessExecutor")
+    nonisolated static let shared = ProcessExecutor()
 
-    private init() {}
+    fileprivate init() {}
 
     /// Run a command asynchronously and return output (throws on failure)
     func run(_ executable: String, arguments: [String]) async throws -> String {

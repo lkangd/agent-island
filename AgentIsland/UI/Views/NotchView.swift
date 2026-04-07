@@ -214,6 +214,23 @@ struct NotchView: View {
         activityCoordinator.expandingActivity.show && activityCoordinator.expandingActivity.type == .processing
     }
 
+    private var activeAgentType: AgentPlatform? {
+        if let session = latestSession(where: { $0.phase.isWaitingForApproval }) {
+            return session.agentType
+        }
+        if let session = latestSession(where: { $0.phase == .processing || $0.phase == .compacting }) {
+            return session.agentType
+        }
+        if let session = latestSession(where: { $0.phase == .waitingForInput }) {
+            return session.agentType
+        }
+        return nil
+    }
+
+    private var activeAccentColor: Color {
+        activeAgentType?.accentColor ?? TerminalColors.claude
+    }
+
     /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
     private var showClosedActivity: Bool {
         isProcessing || hasPendingPermission || hasWaitingForInput
@@ -248,14 +265,14 @@ struct NotchView: View {
     private var headerRow: some View {
         HStack(spacing: 0) {
             // Left side - crab + optional permission indicator (visible when processing, pending, or waiting for input)
-            if showClosedActivity {
+        if showClosedActivity {
                 HStack(spacing: 4) {
-                    IslandMarkIcon(size: 14, animateLegs: isProcessing)
+                    IslandMarkIcon(size: 18, color: activeAccentColor, animateLegs: isProcessing || hasPendingPermission)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
-                    // Permission indicator only (amber) - waiting for input shows checkmark on right
+                    // Permission indicator on active session color
                     if hasPendingPermission {
-                        PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
+                        PermissionIndicatorIcon(size: 14, color: activeAccentColor)
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
@@ -282,12 +299,12 @@ struct NotchView: View {
             // Right side - spinner when processing/pending, checkmark when waiting for input
             if showClosedActivity {
                 if isProcessing || hasPendingPermission {
-                    ProcessingSpinner()
+                    ProcessingSpinner(color: activeAccentColor)
                         .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                         .frame(width: viewModel.status == .opened ? 20 : sideWidth)
                 } else if hasWaitingForInput {
                     // Checkmark for waiting-for-input on the right side
-                    ReadyForInputIndicatorIcon(size: 14, color: TerminalColors.green)
+                    ReadyForInputIndicatorIcon(size: 14, color: activeAccentColor)
                         .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                         .frame(width: viewModel.status == .opened ? 20 : sideWidth)
                 }
@@ -308,7 +325,7 @@ struct NotchView: View {
             // Show static crab only if not showing activity in headerRow
             // (headerRow handles crab + indicator when showClosedActivity is true)
             if !showClosedActivity {
-                IslandMarkIcon(size: 14)
+                        IslandMarkIcon(size: 18, color: activeAccentColor)
                     .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: !showClosedActivity)
                     .padding(.leading, 8)
             }
@@ -497,7 +514,7 @@ struct NotchView: View {
                 let shouldPlaySound = await shouldPlayNotificationSound(for: sessions)
                 if shouldPlaySound {
                     await MainActor.run {
-                        NSSound(named: soundName)?.play()
+                        _ = NSSound(named: soundName)?.play()
                     }
                 }
             }
@@ -527,5 +544,11 @@ struct NotchView: View {
         }
 
         return false
+    }
+
+    private func latestSession(where predicate: (SessionListState) -> Bool) -> SessionListState? {
+        sessionMonitor.instances
+            .filter(predicate)
+            .max(by: { $0.lastActivity < $1.lastActivity })
     }
 }
