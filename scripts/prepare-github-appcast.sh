@@ -14,7 +14,7 @@ GITHUB_REPO="${GITHUB_REPO:-javen-yan/agent-island}"
 
 if [ -z "$VERSION_TAG" ]; then
     echo "ERROR: VERSION_TAG is required"
-    echo "Usage: VERSION_TAG=v1.2.3 DMG_PATH=/path/to/AgentIsland-v1.2.3.dmg $0"
+    echo "Usage: VERSION_TAG=v1.0.0 DMG_PATH=/path/to/AgentIsland-v1.0.0.dmg $0"
     exit 1
 fi
 
