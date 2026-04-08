@@ -199,6 +199,7 @@ struct NotchMenuView: View {
     @ViewBuilder
     private var rootContent: some View {
         ScreenPickerRow(screenSelector: screenSelector)
+        TerminalPickerRow()
         SoundPickerRow(soundSelector: soundSelector)
 
         Divider()

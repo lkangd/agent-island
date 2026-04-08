@@ -227,51 +227,52 @@ private struct TmuxAgentInteractionAdapter: AgentInteractionAdapter {
     let supportsMessaging: Bool
     let supportsSessionControl = true
 
+    private func backendAdapter() -> any TerminalMultiplexerAdapter {
+        TerminalMultiplexerRegistry.shared.adapter(for: AppSettings.terminalBackend)
+    }
+
     nonisolated func canSendMessages(in session: SessionState) -> Bool {
-        supportsMessaging && session.isInTmux && session.tty != nil
+        supportsMessaging && session.isInTerminalMultiplexer && session.tty != nil
     }
 
     func sendMessage(_ message: String, in session: SessionState) async -> Bool {
-        guard let tty = session.tty,
-              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+        guard let tty = session.tty else {
             return false
         }
 
-        return await TmuxController.shared.sendMessage(message, to: target)
+        return await backendAdapter().sendMessage(message, tty: tty, agentPid: session.pid)
     }
 
     nonisolated func canInterruptTurn(in session: SessionState) -> Bool {
-        agentType.terminalControlProfile.supportsInterrupt && session.isInTmux && session.tty != nil
+        agentType.terminalControlProfile.supportsInterrupt && session.isInTerminalMultiplexer && session.tty != nil
     }
 
     func interruptTurn(in session: SessionState) async -> Bool {
         guard canInterruptTurn(in: session),
-              let tty = session.tty,
-              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+              let tty = session.tty else {
             return false
         }
 
-        return await TmuxController.shared.sendSpecialKey(.escape, to: target)
+        return await backendAdapter().sendSpecialKey(.escape, tty: tty, agentPid: session.pid)
     }
 
     nonisolated func canTerminateSession(in session: SessionState) -> Bool {
-        agentType.terminalControlProfile.exitCommand != nil && session.isInTmux && session.tty != nil
+        agentType.terminalControlProfile.exitCommand != nil && session.isInTerminalMultiplexer && session.tty != nil
     }
 
     func terminateSession(in session: SessionState) async -> Bool {
         guard canTerminateSession(in: session),
               let exitCommand = agentType.terminalControlProfile.exitCommand,
-              let tty = session.tty,
-              let target = await TmuxController.shared.findTmuxTarget(forTTY: tty) else {
+              let tty = session.tty else {
             return false
         }
 
         if session.phase.isActive || session.phase.isWaitingForApproval {
-            _ = await TmuxController.shared.sendSpecialKey(.escape, to: target)
+            _ = await backendAdapter().sendSpecialKey(.escape, tty: tty, agentPid: session.pid)
             try? await Task.sleep(for: .milliseconds(120))
         }
 
-        return await TmuxController.shared.sendMessage(exitCommand.text, to: target)
+        return await backendAdapter().sendMessage(exitCommand.text, tty: tty, agentPid: session.pid)
     }
 }
 

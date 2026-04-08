@@ -25,7 +25,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     var pid: Int?
     var tty: String?
-    var isInTmux: Bool
+    var isInTerminalMultiplexer: Bool
 
     // MARK: - State Machine
 
@@ -77,7 +77,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         projectName: String? = nil,
         pid: Int? = nil,
         tty: String? = nil,
-        isInTmux: Bool = false,
+        isInTerminalMultiplexer: Bool = false,
         phase: SessionPhase = .idle,
         phaseSources: SessionPhaseSources? = nil,
         chatItems: [ChatHistoryItem] = [],
@@ -95,7 +95,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.projectName = projectName ?? URL(fileURLWithPath: cwd).lastPathComponent
         self.pid = pid
         self.tty = tty
-        self.isInTmux = isInTmux
+        self.isInTerminalMultiplexer = isInTerminalMultiplexer
         self.phase = phase
         self.phaseSources = phaseSources ?? Self.defaultPhaseSources
         self.chatItems = chatItems
@@ -214,7 +214,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
             projectName: projectName,
             pid: pid,
             tty: tty,
-            isInTmux: isInTmux,
+            isInTerminalMultiplexer: isInTerminalMultiplexer,
             phase: phase,
             conversationInfo: conversationInfo,
             lastActivity: lastActivity,

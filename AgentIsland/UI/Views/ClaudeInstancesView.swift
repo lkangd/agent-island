@@ -120,13 +120,14 @@ struct AgentInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionListState) {
-        guard session.isInTmux else { return }
+        guard session.isInTerminalMultiplexer else { return }
 
+        let backend = AppSettings.terminalBackend
         Task {
             if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forAgentPid: pid)
+                _ = await YabaiController.shared.focusWindow(forAgentPid: pid, terminalBackend: backend)
             } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd, terminalBackend: backend)
             }
             await MainActor.run {
                 viewModel.notchClose()
@@ -300,7 +301,7 @@ struct InstanceRow: View {
                 onChat()
             }
 
-            if session.isInTmux && isYabaiAvailable {
+            if session.isInTerminalMultiplexer && isYabaiAvailable {
                 IconButton(icon: "arrow.up.right") {
                     onFocus()
                 }
@@ -319,7 +320,7 @@ struct InstanceRow: View {
     }
 
     private var showsJumpState: Bool {
-        session.phase == .waitingForInput && session.isInTmux && !isWaitingForApproval
+        session.phase == .waitingForInput && session.isInTerminalMultiplexer && !isWaitingForApproval
     }
 
     @ViewBuilder
@@ -353,7 +354,7 @@ struct InstanceRow: View {
             if isInteractiveTool {
                 ListAskBar(
                     agentName: session.agentType.displayName,
-                    isEnabled: session.isInTmux,
+                    isEnabled: session.isInTerminalMultiplexer,
                     onTap: onFocus
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -361,7 +362,7 @@ struct InstanceRow: View {
                 ListTerminalApprovalBar(
                     tool: session.pendingToolName ?? "exec_command",
                     toolInput: session.pendingToolInput,
-                    isEnabled: session.isInTmux,
+                    isEnabled: session.isInTerminalMultiplexer,
                     onTap: onFocus
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -372,7 +373,7 @@ struct InstanceRow: View {
                 toolInput: session.pendingToolInput,
                 agentType: session.agentType,
                 supportedActions: session.agentType.approvalCapability.supportedActions,
-                isTerminalEnabled: session.isInTmux,
+                isTerminalEnabled: session.isInTerminalMultiplexer,
                 onAction: handleApprovalAction
             )
             .transition(.opacity.combined(with: .scale(scale: 0.9)))

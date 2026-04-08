@@ -31,6 +31,15 @@ enum NotificationSound: String, CaseIterable {
     }
 }
 
+enum TerminalBackend: String, CaseIterable {
+    case tmux
+    case cmux
+
+    var displayName: String {
+        rawValue
+    }
+}
+
 enum AppSettings {
     private static let defaults = UserDefaults.standard
 
@@ -38,6 +47,7 @@ enum AppSettings {
 
     private enum Keys {
         static let notificationSound = "notificationSound"
+        static let terminalBackend = "terminalBackend"
         static let codexDangerousCommandPatterns = "codexDangerousCommandPatterns"
     }
 
@@ -54,6 +64,21 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Terminal Backend
+
+    static var terminalBackend: TerminalBackend {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.terminalBackend),
+                  let backend = TerminalBackend(rawValue: rawValue) else {
+                return .tmux // Default to tmux
+            }
+            return backend
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.terminalBackend)
         }
     }
 

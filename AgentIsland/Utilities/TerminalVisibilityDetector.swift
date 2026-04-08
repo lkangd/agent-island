@@ -50,11 +50,11 @@ struct TerminalVisibilityDetector {
         }
 
         let tree = ProcessTreeBuilder.shared.buildTree()
-        let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: sessionPid, tree: tree)
+        let isInTerminalMultiplexer = ProcessTreeBuilder.shared.isInTerminalMultiplexer(pid: sessionPid, tree: tree)
 
-        if isInTmux {
-            // For tmux sessions, check if the session's pane is active
-            return await TmuxTargetFinder.shared.isSessionPaneActive(agentPid: sessionPid)
+        if isInTerminalMultiplexer {
+            let adapter = TerminalMultiplexerRegistry.shared.adapter(for: AppSettings.terminalBackend)
+            return await adapter.isSessionTargetActive(agentPid: sessionPid)
         } else {
             // For non-tmux sessions, check if the session's terminal app is frontmost
             guard let sessionTerminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree),
