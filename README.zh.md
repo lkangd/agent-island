@@ -83,10 +83,14 @@ AgentIsland 当前采用三层模型：
 ## 文档导航
 
 - [文档索引](./docs/README.zh.md)
-- [内部 Hook 协议](./docs/internal-hook-protocol.zh.md)
-- [多 Agent 架构草案](./docs/multi-agent-architecture.zh.md)
+- [内部 Hook 协议（英文）](./docs/internal-hook-protocol.md)
+- [内部 Hook 协议（中文）](./docs/internal-hook-protocol.zh.md)
+- [多 Agent 架构草案（英文）](./docs/multi-agent-architecture.md)
+- [多 Agent 架构草案（中文）](./docs/multi-agent-architecture.zh.md)
 - [Agent 扩展指南（英文）](./docs/agent-extension-guide.md)
 - [Agent 扩展指南（中文）](./docs/agent-extension-guide.zh.md)
+- [终端交互指南（英文）](./docs/terminal-interaction.md)
+- [终端交互指南（中文）](./docs/terminal-interaction.zh.md)
 
 ## 快速开始
 

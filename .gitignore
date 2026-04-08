@@ -27,11 +27,14 @@ Pods/
 *.swp
 *.swo
 *~
+.codebase-architecture-analyzer/
 
 # IDE
 .idea/
 *.iml
 .vscode/
+.bsp/
+.sourcekit-lsp/
 
 # Sparkle signing keys (NEVER commit these!)
 .sparkle-keys/
@@ -41,10 +44,13 @@ releases/
 
 # Xcode backup
 *.xcodeproj.backup/
-CLAUDE.md
-
 
 bridge-rs/target/*
 bridge-rs/target/.*
 
 AgentIsland/Resources/agent-island-bridge
+
+# Code agents
+.agents
+.claude
+skills-lock.json

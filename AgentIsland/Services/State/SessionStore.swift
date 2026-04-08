@@ -143,7 +143,7 @@ actor SessionStore {
         }
         if let pid = event.pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
-            session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
+            session.isInTerminalMultiplexer = ProcessTreeBuilder.shared.isInTerminalMultiplexer(pid: pid, tree: tree)
         }
         if let tty = event.tty {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")
@@ -203,15 +203,16 @@ actor SessionStore {
             projectName: URL(fileURLWithPath: event.cwd).lastPathComponent,
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
-            isInTmux: false,  // Will be updated
+            isInTerminalMultiplexer: false,  // Will be updated
             phase: phase,
             phaseSources: SessionPhaseSources(hook: phase, transcript: nil, runtime: nil)
         )
     }
 
     private func shouldRetainEndedSession(_ session: SessionState) async -> Bool {
-        if session.isInTmux, let tty = session.tty {
-            if await TmuxController.shared.findTmuxTarget(forTTY: tty) != nil {
+        if session.isInTerminalMultiplexer, let tty = session.tty {
+            let adapter = TerminalMultiplexerRegistry.shared.adapter(for: AppSettings.terminalBackend)
+            if await adapter.hasTarget(forTTY: tty) {
                 return true
             }
         }

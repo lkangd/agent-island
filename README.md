@@ -85,6 +85,7 @@ This keeps UI logic stable while allowing agent-specific differences to live ins
 - [Internal Hook Protocol](./docs/internal-hook-protocol.md)
 - [Multi-Agent Architecture Draft](./docs/multi-agent-architecture.md)
 - [Agent Extension Guide](./docs/agent-extension-guide.md)
+- [Terminal Interaction Guide](./docs/terminal-interaction.md)
 
 ## Quick Start
 

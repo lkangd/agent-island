@@ -15,7 +15,7 @@ struct SessionListState: Equatable, Identifiable, Sendable {
     let projectName: String
     let pid: Int?
     let tty: String?
-    let isInTmux: Bool
+    let isInTerminalMultiplexer: Bool
     let phase: SessionPhase
     let conversationInfo: ConversationInfo
     let lastActivity: Date

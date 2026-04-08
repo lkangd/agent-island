@@ -415,7 +415,7 @@ struct ChatView: View {
         if canSendMessages {
             return "Message \(session.agentType.displayName)..."
         }
-        return "Open \(session.agentType.displayName) in tmux to enable messaging"
+        return "Open \(session.agentType.displayName) in \(AppSettings.terminalBackend.displayName) to enable messaging"
     }
 
     private var inputBar: some View {
@@ -474,7 +474,7 @@ struct ChatView: View {
             toolInput: session.pendingToolInput,
             agentType: session.agentType,
             supportedActions: session.agentType.approvalCapability.supportedActions,
-            isInTmux: session.isInTmux,
+            isInTerminalMultiplexer: session.isInTerminalMultiplexer,
             onAction: { action in handleApprovalAction(action) }
         )
     }
@@ -484,7 +484,7 @@ struct ChatView: View {
             tool: tool,
             toolInput: session.pendingToolInput,
             agentName: session.agentType.displayName,
-            isInTmux: session.isInTmux,
+            isInTerminalMultiplexer: session.isInTerminalMultiplexer,
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -495,7 +495,7 @@ struct ChatView: View {
     private var interactivePromptBar: some View {
         ChatInteractivePromptBar(
             agentName: session.agentType.displayName,
-            isInTmux: session.isInTmux,
+            isInTerminalMultiplexer: session.isInTerminalMultiplexer,
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -518,11 +518,12 @@ struct ChatView: View {
     // MARK: - Actions
 
     private func focusTerminal() {
+        let backend = AppSettings.terminalBackend
         Task {
             if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forAgentPid: pid)
+                _ = await YabaiController.shared.focusWindow(forAgentPid: pid, terminalBackend: backend)
             } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd, terminalBackend: backend)
             }
             await MainActor.run {
                 viewModel.notchClose()
@@ -567,7 +568,12 @@ struct ChatView: View {
     }
 
     private func sendToSession(_ text: String) async {
-        _ = await AgentInteractionRegistry.shared.sendMessage(text, for: session)
+        let sent = await AgentInteractionRegistry.shared.sendMessage(text, for: session)
+        if !sent {
+            await MainActor.run {
+                inputText = text
+            }
+        }
     }
 
     private func interruptTurn() {
@@ -1106,7 +1112,7 @@ struct InterruptedMessageView: View {
 /// Bar for interactive tools like AskUserQuestion that need terminal input
 struct ChatInteractivePromptBar: View {
     let agentName: String
-    let isInTmux: Bool
+    let isInTerminalMultiplexer: Bool
     let onGoToTerminal: () -> Void
 
     @State private var showContent = false
@@ -1129,7 +1135,7 @@ struct ChatInteractivePromptBar: View {
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundColor(TerminalColors.amber)
                         .fixedSize()
-                    Text(isInTmux ? "\(agentName) needs your input in Terminal" : "Terminal jump unavailable for this session")
+                    Text(isInTerminalMultiplexer ? "\(agentName) needs your input in Terminal" : "Terminal jump unavailable for this session")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
@@ -1139,20 +1145,20 @@ struct ChatInteractivePromptBar: View {
             .offset(x: showContent ? 0 : -10)
 
             Button {
-                if isInTmux {
+                if isInTerminalMultiplexer {
                     onGoToTerminal()
                 }
             } label: {
                 HStack(spacing: 4) {
                     Image(agentIcon: "terminal")
                         .font(.system(size: 11, weight: .medium))
-                    Text(isInTmux ? "Jump to Terminal" : "Terminal unavailable")
+                    Text(isInTerminalMultiplexer ? "Jump to Terminal" : "Terminal unavailable")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
+                .foregroundColor(isInTerminalMultiplexer ? .black : .white.opacity(0.4))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(isInTmux ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+                .background(isInTerminalMultiplexer ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -1189,7 +1195,7 @@ struct ChatApprovalBar: View {
     let toolInput: String?
     let agentType: AgentPlatform
     let supportedActions: [ApprovalAction]
-    let isInTmux: Bool
+    let isInTerminalMultiplexer: Bool
     let onAction: (ApprovalAction) -> Void
 
     @State private var showContent = false
@@ -1238,7 +1244,7 @@ struct ChatApprovalBar: View {
 
             HStack(spacing: 8) {
                 ForEach(supportedActions, id: \.self) { action in
-                    let isEnabled = action != .terminal || isInTmux
+                    let isEnabled = action != .terminal || isInTerminalMultiplexer
                     Button {
                         if isEnabled {
                             onAction(action)
@@ -1320,7 +1326,7 @@ struct ChatTerminalApprovalBar: View {
     let tool: String
     let toolInput: String?
     let agentName: String
-    let isInTmux: Bool
+    let isInTerminalMultiplexer: Bool
     let onGoToTerminal: () -> Void
 
     @State private var showContent = false
@@ -1343,7 +1349,7 @@ struct ChatTerminalApprovalBar: View {
                         .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundColor(TerminalColors.amber)
                         .fixedSize()
-                    Text(toolInput ?? (isInTmux ? "\(agentName) needs approval in Terminal" : "Terminal jump unavailable for this session"))
+                    Text(toolInput ?? (isInTerminalMultiplexer ? "\(agentName) needs approval in Terminal" : "Terminal jump unavailable for this session"))
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.75))
                         .fixedSize(horizontal: false, vertical: true)
@@ -1358,13 +1364,13 @@ struct ChatTerminalApprovalBar: View {
                 HStack(spacing: 4) {
                     Image(agentIcon: "terminal")
                         .font(.system(size: 11, weight: .medium))
-                    Text(isInTmux ? "Jump to Terminal" : "Terminal unavailable")
+                    Text(isInTerminalMultiplexer ? "Jump to Terminal" : "Terminal unavailable")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
+                .foregroundColor(isInTerminalMultiplexer ? .black : .white.opacity(0.4))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(isInTmux ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+                .background(isInTerminalMultiplexer ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -1393,7 +1399,7 @@ struct ChatTerminalApprovalBar: View {
     }
 
     private func focusIfPossible() {
-        if isInTmux {
+        if isInTerminalMultiplexer {
             onGoToTerminal()
         }
     }
